@@ -1,0 +1,102 @@
+use serde::{Deserialize, Serialize};
+use uuid::Uuid;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentName {
+    GameSelector,
+    GamePlayer,
+    Profiler,
+    Analyzer,
+    Optimizer,
+    Echo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AgentConfig {
+    pub model: String,
+    pub max_tokens: u32,
+    pub timeout_seconds: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskEnvelope {
+    pub task_id: Uuid,
+    pub agent: AgentName,
+    pub context: serde_json::Value,
+    pub config: AgentConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskStatus {
+    Success,
+    Failure,
+    NeedsInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ApiUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+    pub api_calls: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ResultEnvelope {
+    pub task_id: Uuid,
+    pub status: TaskStatus,
+    pub result: serde_json::Value,
+    pub usage: ApiUsage,
+    pub logs: Vec<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn task_envelope_roundtrip() {
+        let task = TaskEnvelope {
+            task_id: uuid::Uuid::new_v4(),
+            agent: AgentName::Analyzer,
+            context: serde_json::json!({"game_id": 1091500}),
+            config: AgentConfig {
+                model: "claude-sonnet-4-6-20250414".to_string(),
+                max_tokens: 8192,
+                timeout_seconds: 300,
+            },
+        };
+        let json = serde_json::to_string(&task).unwrap();
+        let parsed: TaskEnvelope = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.task_id, task.task_id);
+        assert_eq!(parsed.agent, AgentName::Analyzer);
+        assert_eq!(parsed.config.max_tokens, 8192);
+    }
+
+    #[test]
+    fn result_envelope_success() {
+        let result = ResultEnvelope {
+            task_id: uuid::Uuid::new_v4(),
+            status: TaskStatus::Success,
+            result: serde_json::json!({"bottleneck": "kcompactd"}),
+            usage: ApiUsage {
+                input_tokens: 1234,
+                output_tokens: 567,
+                api_calls: 3,
+            },
+            logs: vec!["analyzed trace".to_string()],
+        };
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: ResultEnvelope = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.status, TaskStatus::Success);
+        assert_eq!(parsed.usage.api_calls, 3);
+    }
+
+    #[test]
+    fn agent_name_serializes_as_snake_case() {
+        let name = AgentName::GameSelector;
+        let json = serde_json::to_value(&name).unwrap();
+        assert_eq!(json, serde_json::json!("game_selector"));
+    }
+}
