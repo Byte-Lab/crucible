@@ -1,9 +1,8 @@
-mod agent_runner;
-mod config;
-mod db;
-
 use clap::Parser;
 use std::path::PathBuf;
+
+use crucible_orchestrator::config;
+use crucible_orchestrator::db;
 
 #[derive(Parser)]
 #[command(name = "crucible-orchestrator")]
@@ -25,6 +24,11 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let config = config::CrucibleConfig::from_file(&cli.config)?;
     tracing::info!(db = %config.orchestrator.db_path, "loaded configuration");
+
+    let _db = db::Database::open(std::path::Path::new(&config.orchestrator.db_path))?;
+    tracing::info!("database initialized");
+
+    tracing::info!("crucible orchestrator ready");
 
     Ok(())
 }
