@@ -1,8 +1,9 @@
 pub mod agent_runner;
-pub mod evaluator;
-pub mod state_machine;
 pub mod config;
 pub mod db;
+pub mod evaluator;
 pub mod kernel_builder;
+pub mod orchestrator;
+pub mod state_machine;
 pub mod vm;
 pub mod vsock_client;
