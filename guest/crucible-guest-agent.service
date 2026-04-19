@@ -1,0 +1,14 @@
+[Unit]
+Description=Crucible Guest Agent (vsock RPC daemon)
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -m guest.crucible_guest_agent
+WorkingDirectory=/opt/crucible
+Environment=PYTHONPATH=/opt/crucible
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

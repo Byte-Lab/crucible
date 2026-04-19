@@ -1,0 +1,298 @@
+# guest/crucible_guest_agent.py
+"""Crucible guest agent -- vsock RPC daemon running inside the VM."""
+
+from __future__ import annotations
+
+import json
+import logging
+import os
+import signal
+import socket
+import struct
+import subprocess
+import time
+from pathlib import Path
+from typing import Any
+
+from guest.protocol import GuestCommand, GuestResponse
+
+logger = logging.getLogger(__name__)
+
+VSOCK_PORT = 5000
+CGROUP_ROOT = Path("/sys/fs/cgroup/crucible")
+_BOOT_TIME: float = time.monotonic()
+
+
+# ---------------------------------------------------------------------------
+# Wire protocol helpers
+# ---------------------------------------------------------------------------
+
+def _recv_message(conn: socket.socket) -> dict[str, Any]:
+    """Read a length-prefixed JSON message from *conn*."""
+    header = b""
+    while len(header) < 4:
+        chunk = conn.recv(4 - len(header))
+        if not chunk:
+            raise ConnectionError("connection closed while reading header")
+        header += chunk
+
+    (length,) = struct.unpack("!I", header)
+    data = b""
+    while len(data) < length:
+        chunk = conn.recv(length - len(data))
+        if not chunk:
+            raise ConnectionError("connection closed while reading payload")
+        data += chunk
+
+    return json.loads(data)
+
+
+def _send_message(conn: socket.socket, data: dict[str, Any]) -> None:
+    """Send a length-prefixed JSON message over *conn*."""
+    payload = json.dumps(data).encode()
+    header = struct.pack("!I", len(payload))
+    conn.sendall(header + payload)
+
+
+# ---------------------------------------------------------------------------
+# Command handler
+# ---------------------------------------------------------------------------
+
+class GuestAgentHandler:
+    """Dispatch-based handler for guest RPC commands.
+
+    Each command ``foo`` is routed to ``_handle_foo(cmd)``.
+    """
+
+    def handle(self, cmd: GuestCommand) -> GuestResponse:
+        method_name = f"_handle_{cmd.cmd}"
+        method = getattr(self, method_name, None)
+        if method is None:
+            return GuestResponse.error(f"unknown command: {cmd.cmd}")
+        try:
+            return method(cmd)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("error handling command %s", cmd.cmd)
+            return GuestResponse.error(str(exc))
+
+    # -- individual handlers ------------------------------------------------
+
+    def _handle_health_check(self, cmd: GuestCommand) -> GuestResponse:
+        uptime = time.monotonic() - _BOOT_TIME
+        return GuestResponse.ok({"uptime": round(uptime, 2), "pid": os.getpid()})
+
+    def _handle_setup_cgroups(self, cmd: GuestCommand) -> GuestResponse:
+        groups = cmd.groups or ["game", "compositor", "wine", "mesa", "system"]
+        created: list[str] = []
+        try:
+            for group in groups:
+                path = CGROUP_ROOT / group
+                path.mkdir(parents=True, exist_ok=True)
+                created.append(str(path))
+                # Enable controllers best-effort
+                ctrl_file = path / "cgroup.subtree_control"
+                try:
+                    ctrl_file.write_text("+cpu +memory +io\n")
+                except OSError:
+                    pass
+        except OSError as exc:
+            return GuestResponse.error(f"cgroup setup failed: {exc}")
+        return GuestResponse.ok({"created": created})
+
+    def _handle_launch_game(self, cmd: GuestCommand) -> GuestResponse:
+        app_id = cmd.app_id
+        if app_id is None:
+            return GuestResponse.error("app_id is required")
+
+        env = os.environ.copy()
+        env.update({
+            "MANGOHUD": "1",
+            "MANGOHUD_LOG_LEVEL": "info",
+        })
+
+        try:
+            proc = subprocess.Popen(
+                ["steam", f"steam://rungameid/{app_id}"],
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return GuestResponse.ok({"pid": proc.pid, "app_id": app_id})
+        except FileNotFoundError:
+            return GuestResponse.error("steam binary not found")
+        except OSError as exc:
+            return GuestResponse.error(f"failed to launch game: {exc}")
+
+    def _handle_stop_game(self, cmd: GuestCommand) -> GuestResponse:
+        cgroup_procs = CGROUP_ROOT / "game" / "cgroup.procs"
+        pids_killed: list[int] = []
+        try:
+            if not cgroup_procs.exists():
+                return GuestResponse.error("game cgroup does not exist")
+            raw = cgroup_procs.read_text().strip()
+            if not raw:
+                return GuestResponse.ok({"killed": []})
+            for line in raw.splitlines():
+                pid = int(line.strip())
+                try:
+                    os.kill(pid, signal.SIGTERM)
+                    pids_killed.append(pid)
+                except ProcessLookupError:
+                    pass
+        except OSError as exc:
+            return GuestResponse.error(f"stop_game failed: {exc}")
+        return GuestResponse.ok({"killed": pids_killed})
+
+    def _handle_start_profiling(self, cmd: GuestCommand) -> GuestResponse:
+        config = cmd.config or {}
+        duration = config.get("duration_s", 30)
+        output = config.get("output", "/tmp/crucible_trace.perfetto-trace")
+        try:
+            proc = subprocess.Popen(
+                [
+                    "perfetto",
+                    "--txt",
+                    "-c", "-",
+                    "-o", output,
+                    "--time", str(duration),
+                ],
+                stdin=subprocess.PIPE,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+            return GuestResponse.ok({"pid": proc.pid, "output": output})
+        except FileNotFoundError:
+            return GuestResponse.error("perfetto binary not found")
+        except OSError as exc:
+            return GuestResponse.error(f"failed to start profiling: {exc}")
+
+    def _handle_stop_profiling(self, cmd: GuestCommand) -> GuestResponse:
+        try:
+            subprocess.run(["pkill", "-f", "perfetto"], check=False)
+        except FileNotFoundError:
+            pass
+
+        trace_dir = Path("/tmp")
+        traces = sorted(trace_dir.glob("crucible_trace*.perfetto-trace"))
+        paths = [str(t) for t in traces]
+        return GuestResponse.ok({"traces": paths})
+
+    def _handle_capture_screen(self, cmd: GuestCommand) -> GuestResponse:
+        config = cmd.config or {}
+        output = config.get("output", "/tmp/crucible_screenshot.png")
+        try:
+            subprocess.run(["grim", output], check=True, capture_output=True)
+            return GuestResponse.ok({"path": output})
+        except FileNotFoundError:
+            return GuestResponse.error("grim binary not found")
+        except subprocess.CalledProcessError as exc:
+            return GuestResponse.error(f"screenshot failed: {exc.stderr.decode()}")
+
+    def _handle_inject_input(self, cmd: GuestCommand) -> GuestResponse:
+        events = cmd.events or []
+        # Placeholder for uinput injection
+        return GuestResponse.ok({"injected": len(events)})
+
+    def _handle_fetch_file(self, cmd: GuestCommand) -> GuestResponse:
+        file_path = cmd.path
+        if file_path is None:
+            return GuestResponse.error("path is required")
+        p = Path(file_path)
+        if not p.exists():
+            return GuestResponse.error(f"file not found: {file_path}")
+        try:
+            size = p.stat().st_size
+            return GuestResponse.ok({"path": str(p), "size": size})
+        except OSError as exc:
+            return GuestResponse.error(f"cannot stat file: {exc}")
+
+    def _handle_get_metrics(self, cmd: GuestCommand) -> GuestResponse:
+        system_psi = _read_system_psi()
+        cgroup_psi = _read_cgroup_psi()
+        return GuestResponse.ok({
+            "system_psi": system_psi,
+            "cgroup_psi": cgroup_psi,
+        })
+
+
+# ---------------------------------------------------------------------------
+# PSI helpers
+# ---------------------------------------------------------------------------
+
+def _read_system_psi() -> dict[str, str]:
+    """Read /proc/pressure/* and return raw contents keyed by resource."""
+    result: dict[str, str] = {}
+    pressure_dir = Path("/proc/pressure")
+    if not pressure_dir.exists():
+        return result
+    for resource in ("cpu", "memory", "io"):
+        path = pressure_dir / resource
+        if path.exists():
+            try:
+                result[resource] = path.read_text().strip()
+            except OSError:
+                pass
+    return result
+
+
+def _read_cgroup_psi() -> dict[str, dict[str, str]]:
+    """Read per-cgroup PSI from the crucible cgroup hierarchy."""
+    result: dict[str, dict[str, str]] = {}
+    if not CGROUP_ROOT.exists():
+        return result
+    for group_dir in CGROUP_ROOT.iterdir():
+        if not group_dir.is_dir():
+            continue
+        group_name = group_dir.name
+        psi: dict[str, str] = {}
+        for resource in ("cpu.pressure", "memory.pressure", "io.pressure"):
+            path = group_dir / resource
+            if path.exists():
+                try:
+                    psi[resource.split(".")[0]] = path.read_text().strip()
+                except OSError:
+                    pass
+        if psi:
+            result[group_name] = psi
+    return result
+
+
+# ---------------------------------------------------------------------------
+# vsock server loop
+# ---------------------------------------------------------------------------
+
+def serve() -> None:
+    """Listen on vsock port 5000 and dispatch RPC commands."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    handler = GuestAgentHandler()
+
+    # AF_VSOCK = 40, VMADDR_CID_ANY = 0xFFFFFFFF
+    AF_VSOCK = 40
+    VMADDR_CID_ANY = 0xFFFFFFFF
+
+    sock = socket.socket(AF_VSOCK, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    sock.bind((VMADDR_CID_ANY, VSOCK_PORT))
+    sock.listen(4)
+    logger.info("crucible guest agent listening on vsock port %d", VSOCK_PORT)
+
+    while True:
+        conn, addr = sock.accept()
+        logger.info("accepted connection from %s", addr)
+        try:
+            while True:
+                raw = _recv_message(conn)
+                cmd = GuestCommand.model_validate(raw)
+                logger.info("received command: %s", cmd.cmd)
+                resp = handler.handle(cmd)
+                _send_message(conn, resp.model_dump())
+        except ConnectionError:
+            logger.info("client disconnected")
+        except Exception:
+            logger.exception("error in connection handler")
+        finally:
+            conn.close()
+
+
+if __name__ == "__main__":
+    serve()
