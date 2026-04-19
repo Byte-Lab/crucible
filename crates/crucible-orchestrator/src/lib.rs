@@ -1,5 +1,6 @@
 pub mod agent_runner;
 pub mod evaluator;
+pub mod state_machine;
 pub mod config;
 pub mod db;
 pub mod kernel_builder;
