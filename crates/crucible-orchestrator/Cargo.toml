@@ -17,6 +17,7 @@ clap = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 tokio-vsock = { workspace = true }
+statrs = { workspace = true }
 
 [dev-dependencies]
 tempfile = "3"
