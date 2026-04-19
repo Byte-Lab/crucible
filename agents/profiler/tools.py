@@ -54,13 +54,21 @@ def parse_mangohud_csv(csv_text: str) -> dict[str, Any]:
     }
 
 
-def _read_psi_file(path: str) -> str | None:
-    """Read a PSI file and return its contents, or None if unavailable."""
+def _parse_psi_file(path: str) -> dict[str, float] | None:
+    """Read a PSI file and parse avg10/avg60/avg300 values from the 'some' line."""
     try:
         with open(path, "r") as fh:
-            return fh.read().strip()
+            for line in fh:
+                if line.startswith("some"):
+                    values: dict[str, float] = {}
+                    for part in line.split()[1:]:
+                        if "=" in part:
+                            k, v = part.split("=", 1)
+                            values[k] = float(v)
+                    return values
     except OSError:
-        return None
+        pass
+    return None
 
 
 def make_profiler_tools(registry: ToolRegistry, guest_rpc: Any) -> None:
@@ -94,17 +102,24 @@ def make_profiler_tools(registry: ToolRegistry, guest_rpc: Any) -> None:
 
     @registry.tool(description="Collect a PSI (Pressure Stall Information) snapshot from /proc/pressure and crucible cgroup.")
     def collect_psi_snapshot() -> dict:
-        system_psi: dict[str, str | None] = {}
+        system_psi: dict[str, dict[str, float] | None] = {}
         for resource in ("cpu", "memory", "io"):
-            proc_path = f"/proc/pressure/{resource}"
-            system_psi[resource] = _read_psi_file(proc_path)
+            system_psi[resource] = _parse_psi_file(f"/proc/pressure/{resource}")
 
-        cgroup_psi: dict[str, str | None] = {}
+        cgroup_psi: list[dict[str, Any]] = []
         cgroup_base = "/sys/fs/cgroup/crucible"
         if os.path.isdir(cgroup_base):
-            for resource in ("cpu", "memory", "io"):
-                cg_path = os.path.join(cgroup_base, f"{resource}.pressure")
-                cgroup_psi[resource] = _read_psi_file(cg_path)
+            for group in os.listdir(cgroup_base):
+                group_path = os.path.join(cgroup_base, group)
+                if not os.path.isdir(group_path):
+                    continue
+                group_data: dict[str, Any] = {"group": group, "psi": {}}
+                for resource in ("cpu", "memory", "io"):
+                    psi_file = os.path.join(group_path, f"{resource}.pressure")
+                    parsed = _parse_psi_file(psi_file)
+                    if parsed is not None:
+                        group_data["psi"][resource] = parsed
+                cgroup_psi.append(group_data)
 
         return {"system_psi": system_psi, "cgroup_psi": cgroup_psi}
 
