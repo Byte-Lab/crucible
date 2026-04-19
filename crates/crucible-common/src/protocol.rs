@@ -51,6 +51,50 @@ pub struct ResultEnvelope {
     pub logs: Vec<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "cmd", rename_all = "snake_case")]
+pub enum GuestCommand {
+    HealthCheck,
+    SetupCgroups {
+        groups: Vec<String>,
+    },
+    LaunchGame {
+        app_id: u64,
+        args: Vec<String>,
+    },
+    StopGame,
+    StartProfiling {
+        config: serde_json::Value,
+    },
+    StopProfiling,
+    CaptureScreen,
+    InjectInput {
+        events: Vec<InputEvent>,
+    },
+    FetchFile {
+        path: String,
+    },
+    GetMetrics,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputEvent {
+    pub event_type: String,
+    pub code: String,
+    pub value: i32,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum GuestResponse {
+    Ok {
+        data: serde_json::Value,
+    },
+    Error {
+        message: String,
+    },
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -98,5 +142,42 @@ mod tests {
         let name = AgentName::GameSelector;
         let json = serde_json::to_value(&name).unwrap();
         assert_eq!(json, serde_json::json!("game_selector"));
+    }
+
+    #[test]
+    fn guest_command_health_check_serializes() {
+        let cmd = GuestCommand::HealthCheck;
+        let json = serde_json::to_value(&cmd).unwrap();
+        assert_eq!(json["cmd"], "health_check");
+    }
+
+    #[test]
+    fn guest_command_launch_game_roundtrip() {
+        let cmd = GuestCommand::LaunchGame {
+            app_id: 1091500,
+            args: vec!["--benchmark".to_string()],
+        };
+        let json = serde_json::to_string(&cmd).unwrap();
+        let parsed: GuestCommand = serde_json::from_str(&json).unwrap();
+        if let GuestCommand::LaunchGame { app_id, args } = parsed {
+            assert_eq!(app_id, 1091500);
+            assert_eq!(args, vec!["--benchmark"]);
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn guest_response_ok_roundtrip() {
+        let resp = GuestResponse::Ok {
+            data: serde_json::json!({"pid": 4521, "cgroup": "crucible/game"}),
+        };
+        let json = serde_json::to_string(&resp).unwrap();
+        let parsed: GuestResponse = serde_json::from_str(&json).unwrap();
+        if let GuestResponse::Ok { data } = parsed {
+            assert_eq!(data["pid"], 4521);
+        } else {
+            panic!("wrong variant");
+        }
     }
 }
