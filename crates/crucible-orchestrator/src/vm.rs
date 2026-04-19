@@ -127,11 +127,11 @@ mod tests {
 
     fn test_vm_config() -> crate::config::VmConfig {
         let toml_str = r#"
-            kernel_src = "/home/void/upstream/questing"
+            kernel_src = "/home/void/upstream/linux"
             guest_rootfs = "/home/void/.crucible/rootfs"
             memory = "16G"
             cpus = 8
-            vfio_device = "0a:00.0"
+            vfio_device = "03:00.0"
             boot_timeout_secs = 60
             vsock_cid = 3
         "#;
@@ -154,7 +154,7 @@ mod tests {
         let manager = VmManager::new(config);
         let cmd = manager.build_boot_command("/path/to/bzImage");
         let joined = cmd.join(" ");
-        assert!(joined.contains("vfio-pci,host=0a:00.0"));
+        assert!(joined.contains("vfio-pci,host=03:00.0"));
         assert!(joined.contains("-m 16G"));
         assert!(joined.contains("-smp 8"));
         assert!(joined.contains("vhost-vsock-pci,guest-cid=3"));

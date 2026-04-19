@@ -5,11 +5,11 @@ max_cycles = 0              # 0 = unlimited
 cycle_cooldown_secs = 60
 
 [vm]
-kernel_src = "/home/void/upstream/questing"
+kernel_src = "/home/void/upstream/linux"
 guest_rootfs = "/home/void/.crucible/rootfs"
 memory = "16G"
 cpus = 8
-vfio_device = "0a:00.0"    # 7900 XT PCI address
+vfio_device = "03:00.0"    # 7900 XT PCI address
 boot_timeout_secs = 60
 vsock_cid = 3
 

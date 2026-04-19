@@ -139,7 +139,7 @@ mod tests {
 
     #[test]
     fn build_command_generation() {
-        let builder = KernelBuilder::new("/home/void/upstream/questing");
+        let builder = KernelBuilder::new("/home/void/upstream/linux");
         let cmd = builder.build_vng_build_command();
         assert_eq!(cmd[0], "vng");
         assert!(cmd.contains(&"--build".to_string()));
@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn build_apply_patch_command() {
-        let builder = KernelBuilder::new("/home/void/upstream/questing");
+        let builder = KernelBuilder::new("/home/void/upstream/linux");
         let cmd = builder.build_apply_patch_command("/tmp/patch.diff");
         assert!(cmd.contains(&"git".to_string()));
         assert!(cmd.contains(&"apply".to_string()));
@@ -169,7 +169,7 @@ mod tests {
 
     #[test]
     fn build_revert_command() {
-        let builder = KernelBuilder::new("/home/void/upstream/questing");
+        let builder = KernelBuilder::new("/home/void/upstream/linux");
         let cmd = builder.build_revert_command();
         assert!(cmd.contains(&"git".to_string()));
         assert!(cmd.contains(&"checkout".to_string()));

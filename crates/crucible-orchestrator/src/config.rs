@@ -190,9 +190,9 @@ mod tests {
             artifact_dir = "/tmp/crucible/artifacts"
 
             [vm]
-            kernel_src = "/home/void/upstream/questing"
+            kernel_src = "/home/void/upstream/linux"
             guest_rootfs = "/home/void/.crucible/rootfs"
-            vfio_device = "0a:00.0"
+            vfio_device = "03:00.0"
 
             [measurement]
 
@@ -200,7 +200,7 @@ mod tests {
         "#;
         let config: CrucibleConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.orchestrator.db_path, "/tmp/crucible/state.db");
-        assert_eq!(config.vm.kernel_src, "/home/void/upstream/questing");
+        assert_eq!(config.vm.kernel_src, "/home/void/upstream/linux");
         assert_eq!(config.vm.memory, "16G"); // default
         assert_eq!(config.measurement.runs_per_phase, 5); // default
         assert_eq!(config.agents.model, "claude-sonnet-4-6-20250414"); // default
@@ -219,11 +219,11 @@ mod tests {
             cycle_cooldown_secs = 120
 
             [vm]
-            kernel_src = "/home/void/upstream/questing"
+            kernel_src = "/home/void/upstream/linux"
             guest_rootfs = "/home/void/.crucible/rootfs"
             memory = "32G"
             cpus = 16
-            vfio_device = "0a:00.0"
+            vfio_device = "03:00.0"
             boot_timeout_secs = 120
             vsock_cid = 5
 

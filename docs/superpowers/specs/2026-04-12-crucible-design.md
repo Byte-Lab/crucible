@@ -5,9 +5,17 @@
 
 ## Overview
 
-Crucible is a closed-loop agentic AI system that continuously measures and optimizes gaming performance on Linux. It orchestrates a set of specialized AI agents that select games, run benchmarks, collect performance profiles, identify bottlenecks, and generate code changes across the full stack -- from the Linux kernel through userspace compositors, Wine/Proton, Mesa, and game engines.
+Crucible is a closed-loop agentic AI system that continuously measures and
+optimizes gaming performance on Linux. It orchestrates a set of specialized AI
+agents that select games, run benchmarks, collect performance profiles,
+identify bottlenecks, and generate code changes across the full stack -- from
+the Linux kernel through userspace compositors, Wine/Proton, Mesa, and game
+engines.
 
-The system runs on a single machine, using a QEMU/KVM virtual machine with GPU passthrough for safe experimentation. A Rust orchestrator daemon manages the optimization loop, while Python agents powered by Claude API handle the reasoning-heavy tasks.
+The system runs on a single machine, using a QEMU/KVM virtual machine with GPU
+passthrough for safe experimentation. A Rust orchestrator daemon manages the
+optimization loop, while Python agents powered by Claude API handle the
+reasoning-heavy tasks.
 
 ## Hardware
 
@@ -268,8 +276,8 @@ crucible-guest-agent is a lightweight Python daemon (~200-300 lines) that listen
 
 ```
 1. Orchestrator receives patch from optimizer agent
-2. Apply: cd /path/to/linux && git apply patch.diff
-3. Build: make -j16 bzImage modules (sccache for caching)
+2. Apply: cd /home/void/upstream/questing && git apply patch.diff
+3. Build: vng --build bzImage modules (sccache for caching)
 4. Boot new VM with patched kernel via virtme-ng
 5. If boot fails (no heartbeat within 60s):
    - Kill VM

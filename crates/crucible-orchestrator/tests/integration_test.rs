@@ -19,7 +19,7 @@ async fn full_round_trip_echo_agent_to_db() {
         [vm]
         kernel_src = "/tmp/linux"
         guest_rootfs = "/tmp/rootfs"
-        vfio_device = "0a:00.0"
+        vfio_device = "03:00.0"
 
         [measurement]
 
