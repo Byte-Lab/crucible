@@ -2,6 +2,8 @@ import json
 import os
 import tempfile
 
+import pytest
+
 from guest.protocol import GuestCommand, GuestResponse
 
 
@@ -69,3 +71,155 @@ def test_handle_fetch_file_not_found():
     cmd = GuestCommand(cmd="fetch_file", path="/nonexistent/file.txt")
     resp = handler.handle(cmd)
     assert resp.status == "error"
+
+
+STRESS_NG_CANNED_STDERR = """\
+stress-ng: info:  [4521] setting to a 5 second run per stressor
+stress-ng: info:  [4521] dispatching hogs: 2 cpu
+stress-ng: info:  [4521] successful run completed in 5.01s
+stress-ng: metrc: [4521] stressor       bogo ops real time  usr time  sys time   bogo ops/s   bogo ops/s
+stress-ng: metrc: [4521]                          (secs)    (secs)    (secs)   (real time) (usr+sys time)
+stress-ng: metrc: [4521] cpu              45164     5.01      9.95      0.02       9015.97      4533.61
+stress-ng: metrc: [4521] vm               12000     5.01      4.50      0.10       2395.21      2608.70
+stress-ng: info:  [4521] complete
+"""
+
+
+def test_parse_stress_ng_metrics_aggregates_stressors():
+    from guest.crucible_guest_agent import _parse_stress_ng_metrics
+
+    metrics = _parse_stress_ng_metrics(STRESS_NG_CANNED_STDERR)
+    assert metrics["bogo_ops"] == 45164 + 12000
+    assert metrics["real_time_secs"] == 5.01
+    # ops_per_sec is summed across parallel stressors
+    assert abs(metrics["ops_per_sec"] - (9015.97 + 2395.21)) < 0.01
+    names = [s["stressor"] for s in metrics["stressors"]]
+    assert names == ["cpu", "vm"]
+
+
+def test_parse_stress_ng_metrics_empty_on_garbage():
+    from guest.crucible_guest_agent import _parse_stress_ng_metrics
+
+    metrics = _parse_stress_ng_metrics("not a real stress-ng output\n")
+    assert metrics["bogo_ops"] == 0
+    assert metrics["ops_per_sec"] == 0.0
+    assert metrics["stressors"] == []
+
+
+def test_handle_run_benchmark_success(monkeypatch):
+    from guest import crucible_guest_agent as gga
+    from guest.crucible_guest_agent import GuestAgentHandler
+
+    psi_values = [
+        {"cpu": 0.10, "memory": 0.05, "io": 0.01},
+        {"cpu": 12.34, "memory": 0.85, "io": 0.20},
+    ]
+    monkeypatch.setattr(gga, "_read_system_psi_avg10", lambda: psi_values.pop(0))
+
+    class FakeProc:
+        returncode = 0
+        stdout = ""
+        stderr = STRESS_NG_CANNED_STDERR
+
+    def fake_run(argv, **_kwargs):
+        assert argv[0] == "stress-ng"
+        assert "--metrics-brief" in argv
+        assert "--timeout" in argv
+        return FakeProc()
+
+    monkeypatch.setattr(gga.subprocess, "run", fake_run)
+
+    handler = GuestAgentHandler()
+    cmd = GuestCommand(
+        cmd="run_benchmark",
+        name="stress-ng",
+        args=["--cpu", "2", "--vm", "1"],
+        duration_secs=5,
+    )
+    resp = handler.handle(cmd)
+    assert resp.status == "ok", resp.message
+    assert resp.data["exit_code"] == 0
+    assert resp.data["bogo_ops"] == 45164 + 12000
+    assert resp.data["psi_cpu_delta"] == pytest.approx(12.24, abs=0.01)
+    assert resp.data["psi_memory_delta"] == pytest.approx(0.80, abs=0.01)
+    assert resp.data["psi_io_delta"] == pytest.approx(0.19, abs=0.01)
+    assert "stress-ng" in resp.data["raw_stderr_tail"]
+
+
+def test_handle_run_benchmark_clamps_negative_psi_delta(monkeypatch):
+    from guest import crucible_guest_agent as gga
+    from guest.crucible_guest_agent import GuestAgentHandler
+
+    psi_values = [
+        {"cpu": 50.0, "memory": 5.0, "io": 1.0},
+        {"cpu": 10.0, "memory": 1.0, "io": 0.5},
+    ]
+    monkeypatch.setattr(gga, "_read_system_psi_avg10", lambda: psi_values.pop(0))
+
+    class FakeProc:
+        returncode = 0
+        stdout = ""
+        stderr = STRESS_NG_CANNED_STDERR
+
+    monkeypatch.setattr(gga.subprocess, "run", lambda *_a, **_kw: FakeProc())
+
+    handler = GuestAgentHandler()
+    cmd = GuestCommand(
+        cmd="run_benchmark",
+        name="stress-ng",
+        args=[],
+        duration_secs=5,
+    )
+    resp = handler.handle(cmd)
+    assert resp.status == "ok"
+    assert resp.data["psi_cpu_delta"] == 0.0
+    assert resp.data["psi_memory_delta"] == 0.0
+    assert resp.data["psi_io_delta"] == 0.0
+
+
+def test_handle_run_benchmark_unsupported_name():
+    from guest.crucible_guest_agent import GuestAgentHandler
+
+    handler = GuestAgentHandler()
+    cmd = GuestCommand(
+        cmd="run_benchmark",
+        name="perf",
+        args=[],
+        duration_secs=5,
+    )
+    resp = handler.handle(cmd)
+    assert resp.status == "error"
+    assert "perf" in resp.message
+
+
+def test_handle_run_benchmark_rejects_missing_duration():
+    from guest.crucible_guest_agent import GuestAgentHandler
+
+    handler = GuestAgentHandler()
+    cmd = GuestCommand(cmd="run_benchmark", name="stress-ng", args=[])
+    resp = handler.handle(cmd)
+    assert resp.status == "error"
+    assert "duration_secs" in resp.message
+
+
+def test_handle_run_benchmark_handles_missing_binary(monkeypatch):
+    from guest import crucible_guest_agent as gga
+    from guest.crucible_guest_agent import GuestAgentHandler
+
+    monkeypatch.setattr(gga, "_read_system_psi_avg10", lambda: {})
+
+    def fake_run(*_a, **_kw):
+        raise FileNotFoundError("no stress-ng")
+
+    monkeypatch.setattr(gga.subprocess, "run", fake_run)
+
+    handler = GuestAgentHandler()
+    cmd = GuestCommand(
+        cmd="run_benchmark",
+        name="stress-ng",
+        args=[],
+        duration_secs=5,
+    )
+    resp = handler.handle(cmd)
+    assert resp.status == "error"
+    assert "stress-ng" in resp.message

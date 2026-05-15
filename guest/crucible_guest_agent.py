@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import signal
 import socket
 import struct
@@ -214,6 +215,58 @@ class GuestAgentHandler:
             "cgroup_psi": cgroup_psi,
         })
 
+    def _handle_run_benchmark(self, cmd: GuestCommand) -> GuestResponse:
+        name = cmd.name or "stress-ng"
+        if name != "stress-ng":
+            return GuestResponse.error(f"unsupported benchmark: {name}")
+        if cmd.duration_secs is None or cmd.duration_secs <= 0:
+            return GuestResponse.error("duration_secs must be a positive integer")
+        duration = cmd.duration_secs
+        extra_args = cmd.args or []
+
+        psi_pre = _read_system_psi_avg10()
+        try:
+            proc = subprocess.run(
+                [
+                    "stress-ng",
+                    "--metrics-brief",
+                    "--timeout",
+                    f"{duration}s",
+                    *extra_args,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=duration + 30,
+            )
+        except FileNotFoundError:
+            return GuestResponse.error("stress-ng binary not found")
+        except subprocess.TimeoutExpired as exc:
+            return GuestResponse.error(f"stress-ng exceeded wall clock timeout: {exc}")
+        psi_post = _read_system_psi_avg10()
+
+        metrics = _parse_stress_ng_metrics(proc.stderr or "")
+        stderr_tail = "\n".join((proc.stderr or "").splitlines()[-20:])
+
+        def delta(resource: str) -> float:
+            before = psi_pre.get(resource, 0.0)
+            after = psi_post.get(resource, 0.0)
+            return max(0.0, after - before)
+
+        return GuestResponse.ok({
+            "name": "stress-ng",
+            "exit_code": proc.returncode,
+            "ops_per_sec": metrics["ops_per_sec"],
+            "bogo_ops": metrics["bogo_ops"],
+            "real_time_secs": metrics["real_time_secs"],
+            "stressors": metrics["stressors"],
+            "psi_cpu_delta": delta("cpu"),
+            "psi_memory_delta": delta("memory"),
+            "psi_io_delta": delta("io"),
+            "psi_pre": psi_pre,
+            "psi_post": psi_post,
+            "raw_stderr_tail": stderr_tail,
+        })
+
 
 # ---------------------------------------------------------------------------
 # PSI helpers
@@ -233,6 +286,84 @@ def _read_system_psi() -> dict[str, str]:
             except OSError:
                 pass
     return result
+
+
+# PSI "some" line shape: `some avg10=0.12 avg60=0.34 avg300=0.56 total=12345`
+_PSI_SOME_RE = re.compile(r"some\s+avg10=([\d.]+)")
+
+# stress-ng --metrics-brief writes lines like:
+#   stress-ng: metrc: [12345] cpu  4516400  30.00  119.59  0.05  150546.67  37766.36
+# Columns: stressor, bogo_ops, real_time_s, usr_time_s, sys_time_s,
+#          ops_per_sec_real, ops_per_sec_usr_sys
+_STRESS_NG_METRIC_RE = re.compile(
+    r"stress-ng:\s+metrc:\s+\[\d+\]\s+(\S+)\s+(\d+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)"
+)
+
+
+def _read_system_psi_avg10() -> dict[str, float]:
+    """Return PSI `some avg10` per resource as a dict keyed by cpu/memory/io."""
+    result: dict[str, float] = {}
+    pressure_dir = Path("/proc/pressure")
+    if not pressure_dir.exists():
+        return result
+    for resource in ("cpu", "memory", "io"):
+        path = pressure_dir / resource
+        if not path.exists():
+            continue
+        try:
+            text = path.read_text()
+        except OSError:
+            continue
+        for line in text.splitlines():
+            m = _PSI_SOME_RE.match(line.strip())
+            if m:
+                result[resource] = float(m.group(1))
+                break
+    return result
+
+
+def _parse_stress_ng_metrics(stderr: str) -> dict[str, Any]:
+    """Parse `stress-ng --metrics-brief` stderr into ops/sec aggregates.
+
+    Returns a dict with totals across all stressors and a per-stressor list.
+    Stressors run in parallel so real_time is the max, not the sum.
+    """
+    total_ops = 0
+    total_real_time = 0.0
+    total_ops_per_sec = 0.0
+    stressors: list[dict[str, Any]] = []
+    header_seen = False
+    for line in stderr.splitlines():
+        # Skip the two header rows: they contain "bogo ops" without numeric
+        # columns and would otherwise be misread by a loose regex. The
+        # metric data lines always come after them.
+        if "bogo ops" in line and "stressor" in line:
+            header_seen = True
+            continue
+        if not header_seen:
+            continue
+        m = _STRESS_NG_METRIC_RE.search(line)
+        if not m:
+            continue
+        name, bogo_ops, real_time, _usr, _sys, ops_real, _ops_usr_sys = m.groups()
+        ops = int(bogo_ops)
+        rt = float(real_time)
+        ops_per_sec = float(ops_real)
+        stressors.append({
+            "stressor": name,
+            "bogo_ops": ops,
+            "real_time_secs": rt,
+            "ops_per_sec": ops_per_sec,
+        })
+        total_ops += ops
+        total_real_time = max(total_real_time, rt)
+        total_ops_per_sec += ops_per_sec
+    return {
+        "bogo_ops": total_ops,
+        "real_time_secs": total_real_time,
+        "ops_per_sec": total_ops_per_sec,
+        "stressors": stressors,
+    }
 
 
 def _read_cgroup_psi() -> dict[str, dict[str, str]]:
