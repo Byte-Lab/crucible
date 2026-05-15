@@ -1,4 +1,5 @@
 import json
+import time
 from typing import Any
 
 import anthropic
@@ -10,7 +11,11 @@ from agents.common.tool_registry import ToolRegistry
 
 
 class ClaudeAgentBase(AgentBase):
-    MAX_TOOL_ROUNDS = 20
+    # 40 API round-trips. The synthetic optimizer workflow (read → edit_file × N
+    # → finalize_patch) is chattier than the old hand-write-a-diff path, so 20
+    # rounds is too tight. The real safety net is `task.config.timeout_seconds`
+    # (default 600s); this cap just bounds runaway tool loops.
+    MAX_TOOL_ROUNDS = 40
 
     def setup_tools(self, registry: ToolRegistry) -> None:
         pass
@@ -24,9 +29,36 @@ class ClaudeAgentBase(AgentBase):
     def extract_result(self, final_text: str, task: TaskEnvelope) -> dict[str, Any]:
         return {"response": final_text}
 
+    def _create_with_backoff(
+        self, client: anthropic.Anthropic, api_kwargs: dict[str, Any]
+    ) -> Any:
+        """One belt-and-braces retry on RateLimitError after SDK retries are
+        exhausted. Honors the `retry-after` header when present; otherwise
+        sleeps 60s. Re-raises on the second failure so the orchestrator
+        can reset the cycle."""
+        try:
+            return client.messages.create(**api_kwargs)
+        except anthropic.RateLimitError as exc:
+            retry_after = 60.0
+            response = getattr(exc, "response", None)
+            if response is not None:
+                header = response.headers.get("retry-after")
+                if header is not None:
+                    try:
+                        retry_after = float(header)
+                    except (TypeError, ValueError):
+                        pass
+            self.log(f"rate limited, sleeping {retry_after:.0f}s before final retry")
+            time.sleep(retry_after)
+            return client.messages.create(**api_kwargs)
+
     def execute(self, task: TaskEnvelope) -> tuple[dict[str, Any], ApiUsage]:
-        client = anthropic.Anthropic()
+        client = anthropic.Anthropic(max_retries=task.config.max_retries)
         registry = ToolRegistry()
+        # Stash the task so subclasses' setup_tools can read context fields
+        # (e.g. the optimizer reads kernel_src to point its file tools at the
+        # right tree). Avoids threading task through every setup_tools sig.
+        self._task = task
         # Expose a guest-RPC client to tools when the orchestrator threaded
         # a vsock CID through context. Tests construct TaskEnvelope without
         # this key, in which case tools fall back to dry-run behavior.
@@ -49,7 +81,7 @@ class ClaudeAgentBase(AgentBase):
             api_kwargs["tools"] = registry.tools
 
         for _ in range(self.MAX_TOOL_ROUNDS):
-            response = client.messages.create(**api_kwargs)
+            response = self._create_with_backoff(client, api_kwargs)
             total_usage.input_tokens += response.usage.input_tokens
             total_usage.output_tokens += response.usage.output_tokens
             total_usage.api_calls += 1

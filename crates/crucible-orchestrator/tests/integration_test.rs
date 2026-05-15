@@ -56,6 +56,7 @@ async fn full_round_trip_echo_agent_to_db() {
             model: config.agents.model.clone(),
             max_tokens: 100,
             timeout_seconds: config.agents.timeout_secs,
+            max_retries: config.agents.max_retries,
         },
     };
 

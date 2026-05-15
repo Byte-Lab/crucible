@@ -42,6 +42,7 @@ pub fn build_task_envelope(
     model: &str,
     max_tokens: u32,
     timeout_seconds: u64,
+    max_retries: u32,
 ) -> TaskEnvelope {
     TaskEnvelope {
         task_id: Uuid::new_v4(),
@@ -51,6 +52,7 @@ pub fn build_task_envelope(
             model: model.to_string(),
             max_tokens,
             timeout_seconds,
+            max_retries,
         },
     }
 }
@@ -71,6 +73,26 @@ pub fn parse_agent_response(value: &serde_json::Value) -> serde_json::Value {
         trimmed
     };
     serde_json::from_str(stripped).unwrap_or_else(|_| value.clone())
+}
+
+/// Pull a `patch_path` out of an Optimizer envelope. Tries the top level first
+/// (the Optimizer's `extract_result` lifts JSON fields up), then falls back to
+/// the `{"response": "<json>"}` form via `parse_agent_response` so older
+/// envelope shapes still light up. Returns `None` when the value is missing,
+/// not a string, or an empty string.
+fn extract_patch_path(value: &serde_json::Value) -> Option<String> {
+    let direct = value.get("patch_path").and_then(|v| v.as_str());
+    if let Some(s) = direct {
+        if !s.is_empty() {
+            return Some(s.to_string());
+        }
+    }
+    let parsed = parse_agent_response(value);
+    parsed
+        .get("patch_path")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
 }
 
 /// Extract a `f64` from a JSON object, returning 0.0 when missing or non-numeric.
@@ -194,14 +216,29 @@ impl Orchestrator {
         agent: AgentName,
         context: serde_json::Value,
     ) -> Result<serde_json::Value> {
+        let max_tokens = self
+            .config
+            .agents
+            .per_agent_max_tokens
+            .get(agent.as_str())
+            .copied()
+            .unwrap_or(self.config.agents.max_tokens);
         let task = build_task_envelope(
             agent,
             context,
             &self.config.agents.model,
-            8192,
+            max_tokens,
             self.config.agents.timeout_secs,
+            self.config.agents.max_retries,
         );
         let result = self.agent_runner.run_agent(task).await?;
+        tracing::info!(
+            agent = agent.as_str(),
+            input_tokens = result.usage.input_tokens,
+            output_tokens = result.usage.output_tokens,
+            api_calls = result.usage.api_calls,
+            "agent usage",
+        );
         match result.status {
             crucible_common::protocol::TaskStatus::Success => Ok(result.result),
             crucible_common::protocol::TaskStatus::Failure => {
@@ -342,6 +379,7 @@ impl Orchestrator {
             .run_agent(AgentName::Profiler, baseline_context)
             .await?;
         self.persist_measurement(cycle_id, "baseline", &baseline_result)?;
+        let baseline_metrics = parse_agent_response(&baseline_result);
 
         // Analyze
         self.state_machine
@@ -353,12 +391,14 @@ impl Orchestrator {
 
         let analyze_context = serde_json::json!({
             "action": "analyze",
-            "game": game_name,
+            "game_name": game_name,
             "cycle_id": cycle_id,
+            "metrics": baseline_metrics,
         });
-        let _analysis = self
+        let analysis_result = self
             .run_agent(AgentName::Analyzer, analyze_context)
             .await?;
+        let analysis = parse_agent_response(&analysis_result);
 
         // GenerateOptimization
         self.state_machine
@@ -368,10 +408,25 @@ impl Orchestrator {
             .update_cycle_status(cycle_id, CycleState::GenerateOptimization.as_str())?;
         tracing::info!(state = %self.state_machine.state(), "generating optimization");
 
+        // Defensive cleanup: if a prior cycle crashed between edit_file and
+        // finalize_patch, the kernel tree may be dirty. The optimizer's
+        // finalize_patch tool relies on diffing against a clean base, so
+        // reset the working tree before invoking it.
+        if let Err(e) = self.kernel_builder.revert_patch().await {
+            tracing::warn!(error = %e, "pre-optimizer revert_patch failed; continuing");
+        }
+
+        // Hand the analyzer's bottleneck + optimization_targets to the
+        // Optimizer so it doesn't fish through the kernel tree blindly.
+        // Without this the LLM burns its whole timeout reading files at
+        // random looking for something to change.
         let optimize_context = serde_json::json!({
             "action": "optimize",
-            "game": game_name,
+            "game_name": game_name,
             "cycle_id": cycle_id,
+            "bottleneck": analysis,
+            "kernel_src": self.config.vm.kernel_src,
+            "attempt_number": 1,
         });
         let optimization = self
             .run_agent(AgentName::Optimizer, optimize_context)
@@ -385,11 +440,26 @@ impl Orchestrator {
             .update_cycle_status(cycle_id, CycleState::ApplyChanges.as_str())?;
         tracing::info!(state = %self.state_machine.state(), "applying changes");
 
-        if let Some(patch_path) = optimization["patch_path"].as_str() {
-            let layer = optimization["layer"].as_str().unwrap_or("kernel");
+        let mut applied_patch = extract_patch_path(&optimization);
+        if let Some(patch_path) = applied_patch.as_deref() {
+            let parsed_opt = parse_agent_response(&optimization);
+            let layer = optimization["layer"]
+                .as_str()
+                .or_else(|| parsed_opt["layer"].as_str())
+                .unwrap_or("kernel");
             self.db.insert_patch(cycle_id, layer, patch_path)?;
             tracing::info!(patch = patch_path, layer, "patch recorded");
-            self.apply_changes(patch_path).await?;
+            // Soft-fail on apply: a corrupt or non-applicable patch must not
+            // crash the cycle. Comparison runs against the unchanged kernel,
+            // evaluator will report Neutral, and the cycle terminates cleanly.
+            if let Err(e) = self.apply_changes(patch_path).await {
+                tracing::warn!(
+                    patch = patch_path,
+                    error = %e,
+                    "apply_changes failed; continuing with baseline kernel",
+                );
+                applied_patch = None;
+            }
         } else {
             tracing::warn!("no patch_path in optimization output, skipping apply");
         }
@@ -430,6 +500,14 @@ impl Orchestrator {
             Verdict::Accept | Verdict::Marginal | Verdict::Neutral => CycleState::Accept,
             Verdict::Regressed => CycleState::Reject,
         };
+        if matches!(overall, Verdict::Regressed) {
+            if let Some(p) = applied_patch.as_deref() {
+                match self.kernel_builder.revert_patch().await {
+                    Ok(()) => tracing::info!(patch = p, "patch reverted on reject"),
+                    Err(e) => tracing::warn!(patch = p, error = %e, "revert_patch failed on reject"),
+                }
+            }
+        }
         self.state_machine
             .transition(next)
             .map_err(|e| anyhow::anyhow!(e))?;
@@ -524,6 +602,41 @@ mod tests {
         let raw = serde_json::json!({"response": "just plain text"});
         let parsed = parse_agent_response(&raw);
         assert_eq!(parsed["response"], "just plain text");
+    }
+
+    #[test]
+    fn extract_patch_path_reads_top_level_field() {
+        let raw = serde_json::json!({
+            "layer": "kernel",
+            "patch_path": "/tmp/p.diff",
+            "response": "ignored",
+        });
+        assert_eq!(extract_patch_path(&raw), Some("/tmp/p.diff".to_string()));
+    }
+
+    #[test]
+    fn extract_patch_path_falls_back_to_response_envelope() {
+        let inner = serde_json::json!({
+            "layer": "kernel",
+            "patch_path": "/tmp/from-inner.diff",
+        });
+        let raw = serde_json::json!({"response": inner.to_string()});
+        assert_eq!(
+            extract_patch_path(&raw),
+            Some("/tmp/from-inner.diff".to_string()),
+        );
+    }
+
+    #[test]
+    fn extract_patch_path_returns_none_on_empty_string() {
+        let raw = serde_json::json!({"patch_path": ""});
+        assert_eq!(extract_patch_path(&raw), None);
+    }
+
+    #[test]
+    fn extract_patch_path_returns_none_when_missing() {
+        let raw = serde_json::json!({"response": "no patch here"});
+        assert_eq!(extract_patch_path(&raw), None);
     }
 
     #[test]
@@ -738,9 +851,11 @@ mod tests {
             "claude-sonnet-4-20250514",
             8192,
             300,
+            3,
         );
         assert_eq!(task.agent, AgentName::Analyzer);
         assert_eq!(task.context["game"], "test");
+        assert_eq!(task.config.max_retries, 3);
     }
 
     #[test]

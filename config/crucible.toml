@@ -29,6 +29,16 @@ max_stddev_pct = 10
 model = "claude-sonnet-4-20250514"
 max_retries = 3
 timeout_secs = 600
+# Per-call Anthropic `max_tokens` cap. Per-agent overrides below win when set.
+# Sized to keep a full cycle (5 calls) inside the org's 30k input-tokens/min cap.
+max_tokens = 4096
+
+[agents.per_agent_max_tokens]
+game_selector = 1024
+profiler      = 2048
+analyzer      = 4096
+optimizer     = 6144
+echo          = 512
 
 [agents.optimizer]
 max_attempts_per_bottleneck = 3

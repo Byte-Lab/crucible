@@ -1,7 +1,32 @@
+import json
 import os
+import subprocess
 import tempfile
-from agents.optimizer.tools import make_optimizer_tools
+import uuid
+
+from agents.common.protocol import AgentConfig, TaskEnvelope
 from agents.common.tool_registry import ToolRegistry
+from agents.optimizer.agent import OptimizerAgent
+from agents.optimizer.tools import make_optimizer_tools
+
+
+def _task() -> TaskEnvelope:
+    return TaskEnvelope(
+        task_id=uuid.uuid4(),
+        agent="optimizer",
+        context={},
+        config=AgentConfig(
+            model="m", max_tokens=1, timeout_seconds=1, max_retries=0
+        ),
+    )
+
+
+def _git_init(repo: str) -> None:
+    """Init a git repo with a single committed file so finalize_patch has a
+    sensible base to diff against."""
+    subprocess.run(["git", "init", "-q", repo], check=True)
+    subprocess.run(["git", "-C", repo, "config", "user.email", "t@t"], check=True)
+    subprocess.run(["git", "-C", repo, "config", "user.name", "t"], check=True)
 
 
 def test_optimizer_tools_registered():
@@ -9,21 +34,13 @@ def test_optimizer_tools_registered():
     make_optimizer_tools(registry, kernel_src="/tmp")
     names = [t["name"] for t in registry.tools]
     assert "read_source_file" in names
-    assert "write_patch" in names
-    assert "apply_sysctl" in names
+    assert "edit_file" in names
+    assert "finalize_patch" in names
     assert "search_kernel_source" in names
-
-
-def test_write_patch():
-    registry = ToolRegistry()
-    with tempfile.TemporaryDirectory() as tmp:
-        make_optimizer_tools(registry, kernel_src=tmp)
-        result = registry.call("write_patch", {
-            "filename": "test.diff",
-            "content": "--- a/kernel/sched/core.c\n+++ b/kernel/sched/core.c\n@@ -1 +1 @@\n-old\n+new\n",
-        })
-        assert result["status"] == "ok"
-        assert os.path.exists(result["path"])
+    assert "apply_sysctl" in names
+    assert "list_source_files" in names
+    # write_patch is gone; LLMs no longer hand-write diffs.
+    assert "write_patch" not in names
 
 
 def test_read_source_file():
@@ -35,3 +52,132 @@ def test_read_source_file():
         make_optimizer_tools(registry, kernel_src=tmp)
         result = registry.call("read_source_file", {"path": "test.c"})
         assert "int main" in result["content"]
+
+
+def test_edit_file_replaces_unique_match():
+    registry = ToolRegistry()
+    with tempfile.TemporaryDirectory() as tmp:
+        src = os.path.join(tmp, "core.c")
+        with open(src, "w") as f:
+            f.write("int main() { return 0; }\n")
+        make_optimizer_tools(registry, kernel_src=tmp)
+        result = registry.call("edit_file", {
+            "path": "core.c",
+            "old_text": "return 0;",
+            "new_text": "return 1;",
+        })
+        assert result["status"] == "ok"
+        with open(src) as f:
+            assert "return 1;" in f.read()
+
+
+def test_edit_file_rejects_missing_text():
+    registry = ToolRegistry()
+    with tempfile.TemporaryDirectory() as tmp:
+        src = os.path.join(tmp, "core.c")
+        with open(src, "w") as f:
+            f.write("int main() { return 0; }\n")
+        make_optimizer_tools(registry, kernel_src=tmp)
+        result = registry.call("edit_file", {
+            "path": "core.c",
+            "old_text": "does_not_exist",
+            "new_text": "anything",
+        })
+        assert result["status"] == "error"
+        assert "not found" in result["error"]
+
+
+def test_edit_file_rejects_ambiguous_match():
+    registry = ToolRegistry()
+    with tempfile.TemporaryDirectory() as tmp:
+        src = os.path.join(tmp, "core.c")
+        with open(src, "w") as f:
+            f.write("x = 1;\nx = 1;\n")
+        make_optimizer_tools(registry, kernel_src=tmp)
+        result = registry.call("edit_file", {
+            "path": "core.c",
+            "old_text": "x = 1;",
+            "new_text": "x = 2;",
+        })
+        assert result["status"] == "error"
+        assert "matches 2" in result["error"]
+
+
+def test_finalize_patch_captures_diff_and_reverts_tree():
+    registry = ToolRegistry()
+    with tempfile.TemporaryDirectory() as tmp:
+        _git_init(tmp)
+        src = os.path.join(tmp, "core.c")
+        with open(src, "w") as f:
+            f.write("int main() { return 0; }\n")
+        subprocess.run(["git", "-C", tmp, "add", "core.c"], check=True)
+        subprocess.run(["git", "-C", tmp, "commit", "-q", "-m", "init"], check=True)
+
+        make_optimizer_tools(registry, kernel_src=tmp)
+        registry.call("edit_file", {
+            "path": "core.c",
+            "old_text": "return 0;",
+            "new_text": "return 1;",
+        })
+        result = registry.call("finalize_patch", {"filename": "ret1.diff"})
+        assert result["status"] == "ok"
+        assert os.path.exists(result["path"])
+        with open(result["path"]) as f:
+            diff = f.read()
+        # Diff must be well-formed unified format — generated by git itself.
+        assert diff.startswith("diff --git ")
+        assert "-\tint main() { return 0; }" in diff or "-int main() { return 0; }" in diff
+        assert "+\tint main() { return 1; }" in diff or "+int main() { return 1; }" in diff
+        # Working tree reverted: source file matches original contents again.
+        with open(src) as f:
+            assert f.read() == "int main() { return 0; }\n"
+
+
+def test_finalize_patch_rejects_empty_diff():
+    registry = ToolRegistry()
+    with tempfile.TemporaryDirectory() as tmp:
+        _git_init(tmp)
+        # Commit something so the tree has a base.
+        src = os.path.join(tmp, "core.c")
+        with open(src, "w") as f:
+            f.write("int main() { return 0; }\n")
+        subprocess.run(["git", "-C", tmp, "add", "core.c"], check=True)
+        subprocess.run(["git", "-C", tmp, "commit", "-q", "-m", "init"], check=True)
+
+        make_optimizer_tools(registry, kernel_src=tmp)
+        result = registry.call("finalize_patch", {"filename": "empty.diff"})
+        assert result["status"] == "error"
+        assert "no edits" in result["error"]
+
+
+def test_extract_result_lifts_json_fields_to_top_level():
+    agent = OptimizerAgent()
+    text = json.dumps({
+        "layer": "kernel",
+        "patch_path": "/abs/path.diff",
+        "patches": [],
+        "sysctl_changes": [],
+        "rationale": "test",
+    })
+    result = agent.extract_result(text, _task())
+    assert result["patch_path"] == "/abs/path.diff"
+    assert result["layer"] == "kernel"
+    assert result["response"] == text
+
+
+def test_extract_result_strips_json_fence():
+    agent = OptimizerAgent()
+    inner = {"layer": "tuning", "patch_path": "", "patches": [],
+             "sysctl_changes": [], "rationale": "no-op"}
+    fenced = "```json\n" + json.dumps(inner) + "\n```"
+    result = agent.extract_result(fenced, _task())
+    assert result["layer"] == "tuning"
+    assert result["patch_path"] == ""
+
+
+def test_extract_result_falls_back_on_non_json():
+    agent = OptimizerAgent()
+    text = "I could not generate a patch."
+    result = agent.extract_result(text, _task())
+    assert result == {"response": text}
+    assert "patch_path" not in result

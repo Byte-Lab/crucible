@@ -46,6 +46,11 @@ impl AgentRunner {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
+            // Without this, a timed-out agent's Anthropic-API request keeps
+            // running in the background (and racking up tokens) until the
+            // python process exits on its own. kill_on_drop ensures the
+            // subprocess dies as soon as the timeout future drops it.
+            .kill_on_drop(true)
             .spawn()
             .with_context(|| format!("failed to spawn agent: {}", module))?;
 
@@ -122,6 +127,7 @@ mod tests {
                 model: "test".to_string(),
                 max_tokens: 100,
                 timeout_seconds: 10,
+                max_retries: 3,
             },
         };
 
@@ -157,6 +163,7 @@ mod tests {
                 model: "test".to_string(),
                 max_tokens: 100,
                 timeout_seconds: 0,
+                max_retries: 3,
             },
         };
 

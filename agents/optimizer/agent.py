@@ -1,4 +1,6 @@
 import json
+from typing import Any
+
 from agents.common.claude_agent import ClaudeAgentBase
 from agents.common.protocol import TaskEnvelope
 from agents.common.tool_registry import ToolRegistry
@@ -10,7 +12,24 @@ class OptimizerAgent(ClaudeAgentBase):
         return """You are the Optimizer agent for Crucible. Generate code changes to address performance bottlenecks.
 Layers: kernel (scheduler, memory, IO), userspace (Mesa, Wine, gamescope), tuning (sysctl).
 Make minimal, targeted changes. Explain reasoning.
-Respond with JSON: {"layer": "kernel|userspace|tuning", "patches": [{"filename": "<name>.diff", "description": "<what>", "risk": "low|medium|high"}], "sysctl_changes": [...], "rationale": "<approach>"}"""
+
+Workflow (do not hand-write unified diffs — let git produce them):
+  1. Navigate with `read_source_file`, `search_kernel_source`, `list_source_files`.
+  2. Apply each change with `edit_file(path, old_text, new_text)`. old_text must
+     match exactly (whitespace, indentation) and appear exactly once; extend it
+     with surrounding context if not unique. Stack as many edit_file calls as you
+     need across one or more files.
+  3. When done, call `finalize_patch("<short-name>.diff")` exactly once. It captures
+     a `git diff` of all your edits into .crucible_patches/<filename> and reverts
+     the working tree. The returned `path` is what you put in `patch_path` below.
+  4. If you cannot produce a safe change, leave `patch_path` as the empty string.
+
+Respond with JSON only (no prose, no fences):
+{"layer": "kernel|userspace|tuning",
+ "patch_path": "<absolute path returned by finalize_patch, or empty string>",
+ "patches": [{"filename": "<name>.diff", "description": "<what>", "risk": "low|medium|high"}],
+ "sysctl_changes": [],
+ "rationale": "<approach>"}"""
 
     def build_user_message(self, task: TaskEnvelope) -> str:
         context = task.context
@@ -26,7 +45,42 @@ Respond with JSON: {"layer": "kernel|userspace|tuning", "patches": [{"filename":
         return msg
 
     def setup_tools(self, registry: ToolRegistry) -> None:
-        make_optimizer_tools(registry, kernel_src="/home/void/upstream/linux")
+        kernel_src = "/home/void/upstream/linux"
+        task = getattr(self, "_task", None)
+        if task is not None:
+            kernel_src = task.context.get("kernel_src", kernel_src)
+        make_optimizer_tools(registry, kernel_src=kernel_src)
+
+    def extract_result(self, final_text: str, task: TaskEnvelope) -> dict[str, Any]:
+        """Lift the inner JSON to the top of the envelope so the orchestrator
+        can read `patch_path`/`layer` directly. Falls through to
+        `{"response": final_text}` when parsing fails so the orchestrator's
+        `parse_agent_response` fallback still has a chance."""
+        parsed = _try_parse_json_block(final_text)
+        if parsed is None:
+            return {"response": final_text}
+        result = dict(parsed)
+        result["response"] = final_text
+        return result
+
+
+def _try_parse_json_block(text: str) -> dict[str, Any] | None:
+    """Mirror `crucible-orchestrator::parse_agent_response`: strip optional
+    ```json fences, then try to parse. Returns None on failure."""
+    trimmed = text.strip()
+    if trimmed.startswith("```json"):
+        trimmed = trimmed[len("```json"):]
+    elif trimmed.startswith("```"):
+        trimmed = trimmed[len("```"):]
+    if trimmed.endswith("```"):
+        trimmed = trimmed[: -len("```")]
+    trimmed = trimmed.strip()
+    try:
+        value = json.loads(trimmed)
+    except json.JSONDecodeError:
+        return None
+    return value if isinstance(value, dict) else None
+
 
 if __name__ == "__main__":
     OptimizerAgent().run()

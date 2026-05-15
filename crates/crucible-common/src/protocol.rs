@@ -12,11 +12,30 @@ pub enum AgentName {
     Echo,
 }
 
+impl AgentName {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            AgentName::GameSelector => "game_selector",
+            AgentName::GamePlayer => "game_player",
+            AgentName::Profiler => "profiler",
+            AgentName::Analyzer => "analyzer",
+            AgentName::Optimizer => "optimizer",
+            AgentName::Echo => "echo",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     pub model: String,
     pub max_tokens: u32,
     pub timeout_seconds: u64,
+    #[serde(default = "default_max_retries")]
+    pub max_retries: u32,
+}
+
+fn default_max_retries() -> u32 {
+    3
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -114,6 +133,7 @@ mod tests {
                 model: "claude-sonnet-4-20250514".to_string(),
                 max_tokens: 8192,
                 timeout_seconds: 300,
+                max_retries: 3,
             },
         };
         let json = serde_json::to_string(&task).unwrap();

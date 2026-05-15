@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::path::Path;
 
 #[derive(Debug, Clone, Deserialize)]
@@ -78,6 +79,16 @@ pub struct AgentsConfig {
     pub max_retries: u32,
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
+    /// Global per-call cap on Anthropic `max_tokens`. Per-agent overrides
+    /// in `per_agent_max_tokens` win when present. Tuned to keep multi-agent
+    /// cycles inside the org rate cap (30k input tokens/min as of 2026-05).
+    #[serde(default = "default_max_tokens")]
+    pub max_tokens: u32,
+    /// Optional per-agent overrides keyed by the snake_case `AgentName`
+    /// (e.g. "optimizer", "profiler"). Missing entries fall back to
+    /// `max_tokens`.
+    #[serde(default)]
+    pub per_agent_max_tokens: HashMap<String, u32>,
     #[serde(default)]
     pub optimizer: OptimizerConfig,
     #[serde(default)]
@@ -155,6 +166,9 @@ fn default_max_retries() -> u32 {
 fn default_timeout() -> u64 {
     300
 }
+fn default_max_tokens() -> u32 {
+    4096
+}
 fn default_max_attempts() -> u32 {
     3
 }
@@ -187,6 +201,8 @@ impl Default for AgentsConfig {
             model: default_model(),
             max_retries: default_max_retries(),
             timeout_secs: default_timeout(),
+            max_tokens: default_max_tokens(),
+            per_agent_max_tokens: HashMap::new(),
             optimizer: OptimizerConfig::default(),
             game_player: GamePlayerConfig::default(),
         }

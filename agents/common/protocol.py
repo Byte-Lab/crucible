@@ -15,6 +15,7 @@ class AgentConfig(BaseModel):
     model: str
     max_tokens: int
     timeout_seconds: int
+    max_retries: int = 3
 
 
 class TaskEnvelope(BaseModel):

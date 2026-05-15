@@ -27,6 +27,19 @@ def test_task_envelope_from_json():
     assert str(task.task_id) == task_id
     assert task.agent == "analyzer"
     assert task.config.max_tokens == 8192
+    # Missing `max_retries` falls back to the schema default so older Rust
+    # callers stay forward-compatible.
+    assert task.config.max_retries == 3
+
+
+def test_agent_config_accepts_max_retries():
+    config = AgentConfig(
+        model="claude-sonnet-4-20250514",
+        max_tokens=4096,
+        timeout_seconds=300,
+        max_retries=5,
+    )
+    assert config.max_retries == 5
 
 
 def test_result_envelope_to_json():

@@ -2,22 +2,33 @@ from __future__ import annotations
 
 import os
 import subprocess
-from typing import Any
 
 from agents.common.tool_registry import ToolRegistry
 
 
 def make_optimizer_tools(registry: ToolRegistry, kernel_src: str) -> None:
-    """Register optimizer tools into the given registry."""
+    """Register optimizer tools into the given registry.
+
+    The optimizer workflow is read → edit → finalize:
+
+    1. `read_source_file` / `search_kernel_source` / `list_source_files`
+       to navigate the tree.
+    2. `edit_file` to replace exact text spans. Each call mutates the
+       host tree in place.
+    3. `finalize_patch` exactly once at the end: captures the full
+       `git diff` of all edits into `.crucible_patches/<filename>` and
+       reverts the working tree so the orchestrator can re-apply the
+       canonical diff via `git apply`.
+
+    Diffs come from git itself, so hunk headers are always well-formed —
+    no more "corrupt patch" rejections from `git apply`.
+    """
 
     @registry.tool(
         description="Read a source file relative to kernel_src or as an absolute path."
     )
     def read_source_file(path: str, start_line: int = 0, max_lines: int = 200) -> dict:
-        if os.path.isabs(path):
-            full_path = path
-        else:
-            full_path = os.path.join(kernel_src, path)
+        full_path = path if os.path.isabs(path) else os.path.join(kernel_src, path)
         try:
             with open(full_path, "r", encoding="utf-8", errors="replace") as fh:
                 lines = fh.readlines()
@@ -54,18 +65,97 @@ def make_optimizer_tools(registry: ToolRegistry, kernel_src: str) -> None:
             return {"error": "search timed out"}
 
     @registry.tool(
-        description="Save a unified diff to the .crucible_patches/ directory under kernel_src."
+        description=(
+            "Replace one exact occurrence of old_text with new_text in a file under "
+            "kernel_src. Fails if old_text is not present or appears more than once "
+            "(use a longer, more specific old_text in that case). Edits stack across "
+            "calls; capture them with finalize_patch when done."
+        )
     )
-    def write_patch(filename: str, content: str) -> dict:
+    def edit_file(path: str, old_text: str, new_text: str) -> dict:
+        full_path = path if os.path.isabs(path) else os.path.join(kernel_src, path)
+        try:
+            with open(full_path, "r", encoding="utf-8") as fh:
+                content = fh.read()
+        except OSError as exc:
+            return {"status": "error", "error": f"read failed: {exc}"}
+        occurrences = content.count(old_text)
+        if occurrences == 0:
+            return {
+                "status": "error",
+                "error": "old_text not found in file (check whitespace and exact characters)",
+            }
+        if occurrences > 1:
+            return {
+                "status": "error",
+                "error": f"old_text matches {occurrences} places; extend it until unique",
+            }
+        new_content = content.replace(old_text, new_text, 1)
+        try:
+            with open(full_path, "w", encoding="utf-8") as fh:
+                fh.write(new_content)
+        except OSError as exc:
+            return {"status": "error", "error": f"write failed: {exc}"}
+        return {"status": "ok", "path": full_path}
+
+    @registry.tool(
+        description=(
+            "Capture all uncommitted edits in kernel_src as a unified diff in "
+            ".crucible_patches/<filename>, then revert the working tree so the "
+            "orchestrator can re-apply the diff cleanly. Call exactly once after "
+            "all edit_file calls. Returns {status, path} or {status: error, error}."
+        )
+    )
+    def finalize_patch(filename: str) -> dict:
+        try:
+            diff_result = subprocess.run(
+                ["git", "-C", kernel_src, "diff"],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except FileNotFoundError:
+            return {"status": "error", "error": "git not found"}
+        except subprocess.TimeoutExpired:
+            return {"status": "error", "error": "git diff timed out"}
+        if diff_result.returncode != 0:
+            return {
+                "status": "error",
+                "error": f"git diff failed: {diff_result.stderr.strip()}",
+            }
+        diff_text = diff_result.stdout
+        if not diff_text.strip():
+            return {
+                "status": "error",
+                "error": "no edits to capture; call edit_file first",
+            }
         patch_dir = os.path.join(kernel_src, ".crucible_patches")
-        os.makedirs(patch_dir, exist_ok=True)
+        try:
+            os.makedirs(patch_dir, exist_ok=True)
+        except OSError as exc:
+            return {"status": "error", "error": f"mkdir failed: {exc}"}
         patch_path = os.path.join(patch_dir, filename)
         try:
             with open(patch_path, "w", encoding="utf-8") as fh:
-                fh.write(content)
-            return {"status": "ok", "path": patch_path}
+                fh.write(diff_text)
         except OSError as exc:
-            return {"status": "error", "error": str(exc)}
+            return {"status": "error", "error": f"write failed: {exc}"}
+        try:
+            revert = subprocess.run(
+                ["git", "-C", kernel_src, "checkout", "--", "."],
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+        except subprocess.TimeoutExpired:
+            return {"status": "error", "error": "git checkout timed out"}
+        if revert.returncode != 0:
+            return {
+                "status": "error",
+                "error": f"git checkout failed: {revert.stderr.strip()}",
+                "path": patch_path,
+            }
+        return {"status": "ok", "path": patch_path}
 
     @registry.tool(
         description="Read the current sysctl value and apply a new one."
