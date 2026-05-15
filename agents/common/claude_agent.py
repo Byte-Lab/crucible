@@ -1,8 +1,17 @@
+import asyncio
 import json
-import time
 from typing import Any
 
-import anthropic
+from claude_agent_sdk import (
+    AssistantMessage,
+    ClaudeAgentOptions,
+    ResultMessage,
+    TextBlock,
+    ToolUseBlock,
+    create_sdk_mcp_server,
+    query,
+    tool,
+)
 
 from agents.common.agent_base import AgentBase
 from agents.common.guest_rpc import GuestRpc
@@ -10,11 +19,34 @@ from agents.common.protocol import ApiUsage, TaskEnvelope
 from agents.common.tool_registry import ToolRegistry
 
 
+# Built-in tools the bundled `claude` CLI would otherwise offer to the model.
+# We don't want the host's Read/Edit/Bash leaking into agent runs (the
+# optimizer in particular has its own kernel-tree-scoped read_file/edit_file).
+# `tools=[]` on ClaudeAgentOptions is the canonical way to disable all
+# built-ins; this list is belt-and-braces in case the SDK adds new builtins
+# that the empty-list switch doesn't yet cover.
+_BUILTIN_TOOLS_TO_DISALLOW = [
+    "Bash",
+    "Edit",
+    "Glob",
+    "Grep",
+    "MultiEdit",
+    "NotebookEdit",
+    "NotebookRead",
+    "Read",
+    "Task",
+    "TodoWrite",
+    "WebFetch",
+    "WebSearch",
+    "Write",
+]
+
+
 class ClaudeAgentBase(AgentBase):
-    # 40 API round-trips. The synthetic optimizer workflow (read → edit_file × N
-    # → finalize_patch) is chattier than the old hand-write-a-diff path, so 20
-    # rounds is too tight. The real safety net is `task.config.timeout_seconds`
-    # (default 600s); this cap just bounds runaway tool loops.
+    # 40 agentic turns. Same rationale as before: synthetic optimizer chains
+    # of read → edit_file × N → finalize_patch are chatty. The real safety
+    # net is `task.config.timeout_seconds` (default 600s); this cap just
+    # bounds runaway tool loops.
     MAX_TOOL_ROUNDS = 40
 
     def setup_tools(self, registry: ToolRegistry) -> None:
@@ -29,31 +61,7 @@ class ClaudeAgentBase(AgentBase):
     def extract_result(self, final_text: str, task: TaskEnvelope) -> dict[str, Any]:
         return {"response": final_text}
 
-    def _create_with_backoff(
-        self, client: anthropic.Anthropic, api_kwargs: dict[str, Any]
-    ) -> Any:
-        """One belt-and-braces retry on RateLimitError after SDK retries are
-        exhausted. Honors the `retry-after` header when present; otherwise
-        sleeps 60s. Re-raises on the second failure so the orchestrator
-        can reset the cycle."""
-        try:
-            return client.messages.create(**api_kwargs)
-        except anthropic.RateLimitError as exc:
-            retry_after = 60.0
-            response = getattr(exc, "response", None)
-            if response is not None:
-                header = response.headers.get("retry-after")
-                if header is not None:
-                    try:
-                        retry_after = float(header)
-                    except (TypeError, ValueError):
-                        pass
-            self.log(f"rate limited, sleeping {retry_after:.0f}s before final retry")
-            time.sleep(retry_after)
-            return client.messages.create(**api_kwargs)
-
     def execute(self, task: TaskEnvelope) -> tuple[dict[str, Any], ApiUsage]:
-        client = anthropic.Anthropic(max_retries=task.config.max_retries)
         registry = ToolRegistry()
         # Stash the task so subclasses' setup_tools can read context fields
         # (e.g. the optimizer reads kernel_src to point its file tools at the
@@ -65,59 +73,104 @@ class ClaudeAgentBase(AgentBase):
         cid = task.context.get("vsock_cid")
         self._guest_rpc = GuestRpc(int(cid)) if isinstance(cid, int) else None
         self.setup_tools(registry)
+        return asyncio.run(self._run(task, registry))
 
-        messages: list[dict[str, Any]] = [
-            {"role": "user", "content": self.build_user_message(task)},
+    async def _run(
+        self, task: TaskEnvelope, registry: ToolRegistry
+    ) -> tuple[dict[str, Any], ApiUsage]:
+        sdk_tools = [
+            tool(t["name"], t["description"], t["input_schema"])(
+                _make_handler(registry, t["name"])
+            )
+            for t in registry.tools
         ]
 
-        total_usage = ApiUsage()
-        api_kwargs: dict[str, Any] = {
+        options_kwargs: dict[str, Any] = {
             "model": task.config.model,
-            "max_tokens": task.config.max_tokens,
-            "system": self.system_prompt(),
-            "messages": messages,
+            "system_prompt": self.system_prompt(),
+            "max_turns": self.MAX_TOOL_ROUNDS,
+            # Disable all built-in tools — agents must drive everything
+            # through registry tools (which are MCP-namespaced below).
+            "tools": [],
+            "disallowed_tools": _BUILTIN_TOOLS_TO_DISALLOW,
+            # No interactive prompts; we're spawned as a subprocess.
+            "permission_mode": "bypassPermissions",
+            # Don't load the user's CLAUDE.md, project settings, or plugins
+            # into the agent's context. Isolation matters here — we want
+            # only the system prompt the agent explicitly provides.
+            "setting_sources": [],
+            # `task.config.max_retries` historically controlled the
+            # anthropic SDK's retry count. Threading it through to the
+            # bundled `claude` CLI keeps the same knob meaningful.
+            "env": {"CLAUDE_CODE_MAX_RETRIES": str(task.config.max_retries)},
         }
-        if registry.tools:
-            api_kwargs["tools"] = registry.tools
+        if sdk_tools:
+            options_kwargs["mcp_servers"] = {
+                "crucible": create_sdk_mcp_server(
+                    name="crucible", version="0.1.0", tools=sdk_tools
+                ),
+            }
+            options_kwargs["allowed_tools"] = [
+                f"mcp__crucible__{t['name']}" for t in registry.tools
+            ]
 
-        for _ in range(self.MAX_TOOL_ROUNDS):
-            response = self._create_with_backoff(client, api_kwargs)
-            total_usage.input_tokens += response.usage.input_tokens
-            total_usage.output_tokens += response.usage.output_tokens
-            total_usage.api_calls += 1
+        options = ClaudeAgentOptions(**options_kwargs)
 
-            if response.stop_reason != "tool_use":
-                final_text = ""
-                for block in response.content:
-                    if block.type == "text":
-                        final_text += block.text
-                return self.extract_result(final_text, task), total_usage
+        final_text = ""
+        usage = ApiUsage()
+        async for msg in query(
+            prompt=self.build_user_message(task), options=options
+        ):
+            if isinstance(msg, AssistantMessage):
+                if msg.error:
+                    raise RuntimeError(f"assistant error: {msg.error}")
+                turn_text = ""
+                for block in msg.content:
+                    if isinstance(block, TextBlock):
+                        turn_text += block.text
+                    elif isinstance(block, ToolUseBlock):
+                        self.log(
+                            f"tool call: {block.name}({json.dumps(block.input)})"
+                        )
+                # Each assistant turn overwrites — the final non-empty turn
+                # before ResultMessage wins. Mirrors the old code's
+                # stop_reason != "tool_use" final-text capture.
+                if turn_text:
+                    final_text = turn_text
+            elif isinstance(msg, ResultMessage):
+                if msg.usage:
+                    usage.input_tokens = int(msg.usage.get("input_tokens", 0))
+                    usage.output_tokens = int(msg.usage.get("output_tokens", 0))
+                usage.api_calls = msg.num_turns
+                if msg.is_error:
+                    err = (msg.errors or [msg.stop_reason or "unknown"])[0] or "unknown"
+                    raise RuntimeError(f"agent failed: {err}")
+                if not final_text and msg.result:
+                    final_text = msg.result
 
-            assistant_content = []
-            tool_results = []
-            for block in response.content:
-                if block.type == "text":
-                    assistant_content.append({"type": "text", "text": block.text})
-                elif block.type == "tool_use":
-                    assistant_content.append({
-                        "type": "tool_use", "id": block.id,
-                        "name": block.name, "input": block.input,
-                    })
-                    self.log(f"tool call: {block.name}({json.dumps(block.input)})")
-                    try:
-                        tool_output = registry.call(block.name, block.input)
-                        tool_results.append({
-                            "type": "tool_result", "tool_use_id": block.id,
-                            "content": json.dumps(tool_output),
-                        })
-                    except Exception as exc:
-                        tool_results.append({
-                            "type": "tool_result", "tool_use_id": block.id,
-                            "content": json.dumps({"error": str(exc)}), "is_error": True,
-                        })
+        return self.extract_result(final_text, task), usage
 
-            messages.append({"role": "assistant", "content": assistant_content})
-            messages.append({"role": "user", "content": tool_results})
-            api_kwargs["messages"] = messages
 
-        raise RuntimeError(f"agent exceeded {self.MAX_TOOL_ROUNDS} tool rounds")
+def _make_handler(registry: ToolRegistry, name: str):
+    """Return an async MCP tool handler that delegates to the sync registry.
+
+    Bound in a separate factory to capture `name` correctly (avoid the
+    classic late-binding loop closure pitfall)."""
+
+    async def handler(args: dict[str, Any]) -> dict[str, Any]:
+        try:
+            result = registry.call(name, args)
+            return {
+                "content": [
+                    {"type": "text", "text": json.dumps(result, default=str)}
+                ]
+            }
+        except Exception as exc:
+            return {
+                "content": [
+                    {"type": "text", "text": json.dumps({"error": str(exc)})}
+                ],
+                "is_error": True,
+            }
+
+    return handler

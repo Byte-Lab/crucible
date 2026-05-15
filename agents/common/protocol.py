@@ -13,8 +13,12 @@ class TaskStatus(str, Enum):
 
 class AgentConfig(BaseModel):
     model: str
+    # Advisory under the Claude Agent SDK — the bundled CLI has no per-call
+    # output-token cap. Tool loops are bounded by ClaudeAgentBase.MAX_TOOL_ROUNDS
+    # and the orchestrator's subprocess timeout.
     max_tokens: int
     timeout_seconds: int
+    # Forwarded to the CLI via CLAUDE_CODE_MAX_RETRIES.
     max_retries: int = 3
 
 

@@ -52,7 +52,11 @@ Run a single agent by hand (it reads a `TaskEnvelope` JSON on stdin, writes a `R
 PYTHONPATH=. python3 -m agents.echo.agent < task.json
 ```
 
-Claude-backed agents (`game_selector`, `profiler`, `analyzer`, `optimizer`) need `ANTHROPIC_API_KEY` in the environment. `echo` does not.
+Claude-backed agents (`game_selector`, `profiler`, `analyzer`, `optimizer`) route through the `claude-agent-sdk` PyPI package, which shells out to the bundled `claude` CLI for inference. That CLI inherits the OAuth session created by `claude /login`, so usage bills against the user's Claude.ai Pro/Max plan — **no `ANTHROPIC_API_KEY` is read or required**. `echo` is plain Python and needs neither. If the `claude` CLI hasn't been logged in on this machine, run `claude /login` interactively once before running any Claude-backed agent.
+
+Two protocol fields kept on the wire for backwards compatibility have drifted in meaning under the Agent SDK:
+- `AgentConfig.max_tokens` is **advisory only** — the SDK has no per-call output-token cap. Tool loops are bounded by `MAX_TOOL_ROUNDS = 40` (in `ClaudeAgentBase`) and the orchestrator's `timeout_seconds` subprocess kill.
+- `AgentConfig.max_retries` is forwarded to the CLI via `CLAUDE_CODE_MAX_RETRIES` (default 10 in the CLI; our default 3 here).
 
 Logging: orchestrator uses `tracing` with `RUST_LOG`-style env filter — default is `crucible_orchestrator=info`.
 
@@ -87,7 +91,7 @@ The full pipeline is wired:
 
 Synthetic-loop path (`[measurement] mode = "synthetic"`, default): the profiler agent calls `run_benchmark('stress-ng', args, duration_secs)` via the guest RPC, parses ops/sec from `--metrics-brief`, and emits `fps_avg = fps_p1 = 0`, `frame_time_p99_ms = 1000 / ops_per_sec`, `psi_*_avg = psi_*_delta`. Game-mode (`mode = "game"`) keeps the MangoHud/perfetto tools and is gated on a Steam/Wine/Mesa rootfs that doesn't exist yet.
 
-End-to-end status (2026-05-15): `cargo test --test e2e` with `CRUCIBLE_E2E=1` runs cleanly through **SelectGame → ProvisionVm → BaselineMeasurement → Analyze**, then trips the Anthropic API 429 rate limit on the **GenerateOptimization** call (org cap = 30k input tokens/min). `ApplyChanges`, `ComparisonMeasurement`, `Evaluate` haven't been exercised live yet. `Iterate` exists in the state machine but is never reached. `Reject` does not yet revert the applied patch via `KernelBuilder::revert_patch`. The hardware-gated test prints `e2e skipped` and passes when `CRUCIBLE_E2E` is unset.
+End-to-end status (2026-05-15): `cargo test --test e2e` with `CRUCIBLE_E2E=1` runs cleanly through **SelectGame → ProvisionVm → BaselineMeasurement → Analyze**, then previously tripped the Anthropic API 429 rate limit on the **GenerateOptimization** call (org cap = 30k input tokens/min). Migration to the Claude Agent SDK (commit pending) routes inference through the user's Pro/Max subscription instead of the API console, removing that cap. `ApplyChanges`, `ComparisonMeasurement`, `Evaluate` haven't been exercised live since the migration. `Iterate` exists in the state machine but is never reached. `Reject` does not yet revert the applied patch via `KernelBuilder::revert_patch`. The hardware-gated test prints `e2e skipped` and passes when `CRUCIBLE_E2E` is unset.
 
 ### Agent dispatch protocol
 

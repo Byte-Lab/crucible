@@ -28,8 +28,13 @@ impl AgentName {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     pub model: String,
+    /// Advisory under the Claude Agent SDK — the bundled `claude` CLI has no
+    /// per-call output-token cap. Tool loops are bounded by
+    /// `ClaudeAgentBase.MAX_TOOL_ROUNDS` (Python side) and the orchestrator's
+    /// subprocess timeout.
     pub max_tokens: u32,
     pub timeout_seconds: u64,
+    /// Forwarded to the bundled `claude` CLI via `CLAUDE_CODE_MAX_RETRIES`.
     #[serde(default = "default_max_retries")]
     pub max_retries: u32,
 }
