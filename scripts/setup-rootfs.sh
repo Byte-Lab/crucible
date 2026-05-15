@@ -9,12 +9,21 @@
 # we fail fast with an install hint rather than silently switching to
 # `debootstrap` (which needs root).
 #
+# All overlay work (guest agent install, systemd unit enable, modules-load
+# files, stamp file) runs inside mmdebstrap's user namespace via
+# `--customize-hook`. Doing it after mmdebstrap exits would fail because
+# the rootfs would be owned by a subuid the host user can't write.
+#
 # Usage:
 #   scripts/setup-rootfs.sh [--target <dir>] [--suite <debian-suite>] [--force]
 #
 # Environment:
-#   CRUCIBLE_ROOTFS   Default target dir if --target not given.
-#                     (default: ~/.crucible/rootfs)
+#   CRUCIBLE_ROOTFS         Default target dir if --target not given.
+#                           (default: ~/.crucible/rootfs)
+#   CRUCIBLE_ROOTFS_INSECURE  Set to 1 to skip apt signature verification.
+#                           Needed when the host lacks debian-archive-keyring
+#                           (e.g. Ubuntu hosts without debian-archive-keyring
+#                           installed).
 
 set -euo pipefail
 
@@ -72,6 +81,7 @@ fi
 # Packages the guest needs:
 #   systemd-sysv  systemd + init scripts
 #   python3       runs the guest agent module
+#   python3-pydantic guest agent dependency
 #   stress-ng     synthetic workload driver
 #   linux-perf    "perf" binary (optional, useful for future bench types)
 #   dbus          systemd dependency surface
@@ -93,43 +103,53 @@ PACKAGES=(
     procps
     iproute2
 )
+PKG_LIST="$(IFS=,; echo "${PACKAGES[*]}")"
 
 echo "[setup-rootfs] target  : $TARGET"
 echo "[setup-rootfs] suite   : $SUITE"
 echo "[setup-rootfs] packages: ${PACKAGES[*]}"
 
-mkdir -p "$TARGET"
+# A previous failed run can leave a directory owned by mmdebstrap's
+# subuid that the host user can't delete. Bail with a clear hint rather
+# than confusing the user with permission errors deep inside mmdebstrap.
+if [[ -e "$TARGET" ]]; then
+    if ! rm -rf "$TARGET" 2>/dev/null; then
+        echo "[setup-rootfs] $TARGET exists but cannot be removed by \$USER." >&2
+        echo "[setup-rootfs] Likely owned by a subuid from a prior mmdebstrap run." >&2
+        echo "[setup-rootfs] Pick a fresh path with --target, or sudo rm -rf $TARGET." >&2
+        exit 1
+    fi
+fi
 
-# Bootstrap the base system.
-PKG_LIST="$(IFS=,; echo "${PACKAGES[*]}")"
-mmdebstrap \
-    --variant=minbase \
-    --include="$PKG_LIST" \
-    "$SUITE" \
-    "$TARGET"
+# Stage the overlay payload into a world-traversable location. mmdebstrap's
+# customize hook runs in a user namespace mapped to a subuid that can't
+# traverse $HOME (mode 0750). /tmp is mode 1777 + world-readable.
+STAGE="$(mktemp -d /tmp/cruc-overlay.XXXXXX)"
+trap 'rm -rf "$STAGE"' EXIT
+cp -a "$REPO_ROOT/guest" "$STAGE/guest"
+chmod -R a+rX "$STAGE"
+HOOK="$STAGE/hook.sh"
+cat >"$HOOK" <<'HOOK_EOF'
+set -euo pipefail
+ROOTFS="$1"
+STAGE="$2"
 
-# Install the guest agent payload.
-install -d "$TARGET/opt/crucible"
-rsync -a --delete "$REPO_ROOT/guest/" "$TARGET/opt/crucible/guest/"
+install -d "$ROOTFS/opt/crucible/guest"
+cp -a "$STAGE/guest/." "$ROOTFS/opt/crucible/guest/"
+chmod +x "$ROOTFS/opt/crucible/guest/setup_cgroups.sh"
 
-# Drop the systemd unit and enable it at boot.
 install -m 0644 \
-    "$REPO_ROOT/guest/crucible-guest-agent.service" \
-    "$TARGET/etc/systemd/system/crucible-guest-agent.service"
-install -d "$TARGET/etc/systemd/system/multi-user.target.wants"
-ln -sf \
-    /etc/systemd/system/crucible-guest-agent.service \
-    "$TARGET/etc/systemd/system/multi-user.target.wants/crucible-guest-agent.service"
+    "$STAGE/guest/crucible-guest-agent.service" \
+    "$ROOTFS/etc/systemd/system/crucible-guest-agent.service"
+install -d "$ROOTFS/etc/systemd/system/multi-user.target.wants"
+ln -sf /etc/systemd/system/crucible-guest-agent.service \
+    "$ROOTFS/etc/systemd/system/multi-user.target.wants/crucible-guest-agent.service"
 
-# Load vsock virtio transport at boot so the agent can bind port 5000.
-install -d "$TARGET/etc/modules-load.d"
-cat >"$TARGET/etc/modules-load.d/vsock.conf" <<EOF
-vsock
-vmw_vsock_virtio_transport
-EOF
+install -d "$ROOTFS/etc/modules-load.d"
+printf 'vsock\nvmw_vsock_virtio_transport\n' \
+    >"$ROOTFS/etc/modules-load.d/vsock.conf"
 
-# Run the cgroup setup script as a oneshot before the guest agent starts.
-cat >"$TARGET/etc/systemd/system/crucible-cgroups.service" <<'EOF'
+cat >"$ROOTFS/etc/systemd/system/crucible-cgroups.service" <<'UNIT'
 [Unit]
 Description=Crucible cgroup hierarchy setup
 Before=crucible-guest-agent.service
@@ -143,11 +163,34 @@ RemainAfterExit=yes
 
 [Install]
 WantedBy=multi-user.target
-EOF
-ln -sf \
-    /etc/systemd/system/crucible-cgroups.service \
-    "$TARGET/etc/systemd/system/multi-user.target.wants/crucible-cgroups.service"
+UNIT
+ln -sf /etc/systemd/system/crucible-cgroups.service \
+    "$ROOTFS/etc/systemd/system/multi-user.target.wants/crucible-cgroups.service"
 
-# Stamp the rootfs so re-runs short-circuit.
-date -u +"%Y-%m-%dT%H:%M:%SZ" >"$STAMP"
+date -u +"%Y-%m-%dT%H:%M:%SZ" >"$ROOTFS/.crucible-built"
+HOOK_EOF
+chmod 0755 "$HOOK"
+
+# Insecure apt opts when the host doesn't have debian-archive-keyring
+# installed (common on non-Debian hosts). The rootfs is for ephemeral
+# local dev VMs, not production.
+APT_OPTS=()
+if [[ "${CRUCIBLE_ROOTFS_INSECURE:-0}" == "1" ]] \
+    || ! ls /usr/share/keyrings/debian-archive*.gpg >/dev/null 2>&1; then
+    echo "[setup-rootfs] debian-archive-keyring not found; skipping signature verification"
+    APT_OPTS+=(
+        --aptopt='APT::Get::AllowUnauthenticated "true"'
+        --aptopt='Acquire::AllowInsecureRepositories "true"'
+        --aptopt='Acquire::AllowDowngradeToInsecureRepositories "true"'
+    )
+fi
+
+mmdebstrap \
+    --variant=minbase \
+    --include="$PKG_LIST" \
+    "${APT_OPTS[@]}" \
+    --customize-hook="bash $HOOK \"\$1\" $STAGE" \
+    "$SUITE" \
+    "$TARGET"
+
 echo "[setup-rootfs] done. rootfs at $TARGET"
