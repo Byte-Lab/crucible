@@ -91,7 +91,7 @@ impl VmManager {
         self.state = VmState::Booting;
 
         let cmd_args = self.build_boot_command(kernel_path);
-        tracing::info!(kernel = kernel_path, "booting VM");
+        tracing::info!(kernel = kernel_path, cmd = %cmd_args.join(" "), "booting VM");
 
         let child = Command::new(&cmd_args[0])
             .args(&cmd_args[1..])
@@ -99,6 +99,9 @@ impl VmManager {
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
+            // If the orchestrator crashes or the test panics, send SIGKILL
+            // to vng/QEMU so it doesn't keep CID 3 reserved on the host.
+            .kill_on_drop(true)
             .spawn()
             .with_context(|| {
                 format!("failed to spawn vng: {}", cmd_args.join(" "))
