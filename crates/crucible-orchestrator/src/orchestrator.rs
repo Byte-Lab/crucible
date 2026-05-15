@@ -1,5 +1,7 @@
 use anyhow::Result;
 use crucible_common::protocol::{AgentConfig, AgentName, TaskEnvelope};
+use std::path::PathBuf;
+use std::time::Duration;
 use uuid::Uuid;
 
 use crate::agent_runner::AgentRunner;
@@ -8,6 +10,8 @@ use crate::db::{Database, Measurement};
 use crate::evaluator::{evaluate_metric, EvalConfig, MetricEvaluation, Verdict};
 use crate::kernel_builder::KernelBuilder;
 use crate::state_machine::{CycleState, StateMachine};
+use crate::vm::{VmManager, VmState};
+use crate::vsock_client::VsockClient;
 
 /// Metrics persisted per measurement, paired with whether lower values are better.
 const METRIC_DEFS: &[(&str, bool)] = &[
@@ -160,20 +164,32 @@ pub struct Orchestrator {
     config: CrucibleConfig,
     db: Database,
     agent_runner: AgentRunner,
-    #[allow(dead_code)]
     kernel_builder: KernelBuilder,
+    vm_manager: VmManager,
+    vsock_client: VsockClient,
     state_machine: StateMachine,
+    /// Path to the most recently built kernel image. `None` until the first
+    /// successful `KernelBuilder::build_kernel`.
+    current_kernel: Option<PathBuf>,
 }
 
 impl Orchestrator {
     pub fn new(config: CrucibleConfig, db: Database, agent_runner: AgentRunner) -> Self {
         let kernel_builder = KernelBuilder::new(&config.vm.kernel_src);
+        let vm_manager = VmManager::new(config.vm.clone());
+        let vsock_client = VsockClient::new(
+            config.vm.vsock_cid,
+            Duration::from_secs(config.vm.boot_timeout_secs),
+        );
         Self {
             config,
             db,
             agent_runner,
             kernel_builder,
+            vm_manager,
+            vsock_client,
             state_machine: StateMachine::new(),
+            current_kernel: None,
         }
     }
 
@@ -186,6 +202,49 @@ impl Orchestrator {
             significance_threshold: self.config.measurement.significance_threshold,
             effect_size_threshold: self.config.measurement.effect_size_threshold,
         }
+    }
+
+    /// Build a kernel image (if not already cached for this cycle) and boot
+    /// the VM. No-op if the VM is already running with a usable kernel.
+    pub async fn provision_vm(&mut self) -> Result<()> {
+        let kernel_path = match &self.current_kernel {
+            Some(p) => p.clone(),
+            None => {
+                let p = self.kernel_builder.build_kernel().await?;
+                self.current_kernel = Some(p.clone());
+                p
+            }
+        };
+
+        if self.vm_manager.state() == VmState::Running {
+            tracing::info!("VM already running, skipping boot");
+            return Ok(());
+        }
+
+        let kernel_str = kernel_path.to_string_lossy().to_string();
+        self.vm_manager.boot(&kernel_str).await?;
+        let timeout = Duration::from_secs(self.config.vm.boot_timeout_secs);
+        self.vm_manager
+            .wait_for_ready(&self.vsock_client, timeout)
+            .await?;
+        Ok(())
+    }
+
+    /// Apply a patch to the kernel source, rebuild, then reboot the VM with
+    /// the new image. Caller is responsible for persisting the patch row in
+    /// the `patches` table separately.
+    pub async fn apply_changes(&mut self, patch_path: &str) -> Result<()> {
+        let new_kernel = self.kernel_builder.apply_and_build(patch_path).await?;
+        self.vm_manager.shutdown().await?;
+        self.current_kernel = Some(new_kernel.clone());
+
+        let kernel_str = new_kernel.to_string_lossy().to_string();
+        self.vm_manager.boot(&kernel_str).await?;
+        let timeout = Duration::from_secs(self.config.vm.boot_timeout_secs);
+        self.vm_manager
+            .wait_for_ready(&self.vsock_client, timeout)
+            .await?;
+        Ok(())
     }
 
     async fn run_agent(
@@ -316,7 +375,8 @@ impl Orchestrator {
             .map_err(|e| anyhow::anyhow!(e))?;
         self.db
             .update_cycle_status(cycle_id, CycleState::ProvisionVm.as_str())?;
-        tracing::info!(state = %self.state_machine.state(), "provisioning VM (placeholder)");
+        tracing::info!(state = %self.state_machine.state(), "provisioning VM");
+        self.provision_vm().await?;
 
         // BaselineMeasurement
         self.state_machine
@@ -377,12 +437,15 @@ impl Orchestrator {
             .map_err(|e| anyhow::anyhow!(e))?;
         self.db
             .update_cycle_status(cycle_id, CycleState::ApplyChanges.as_str())?;
-        tracing::info!(state = %self.state_machine.state(), "applying changes (placeholder)");
+        tracing::info!(state = %self.state_machine.state(), "applying changes");
 
         if let Some(patch_path) = optimization["patch_path"].as_str() {
             let layer = optimization["layer"].as_str().unwrap_or("kernel");
             self.db.insert_patch(cycle_id, layer, patch_path)?;
             tracing::info!(patch = patch_path, layer, "patch recorded");
+            self.apply_changes(patch_path).await?;
+        } else {
+            tracing::warn!("no patch_path in optimization output, skipping apply");
         }
 
         // ComparisonMeasurement
@@ -708,6 +771,13 @@ mod tests {
         for r in &rows {
             assert_eq!(r.verdict, "neutral");
         }
+    }
+
+    #[test]
+    fn orchestrator_constructs_vm_and_vsock_fields() {
+        let orch = make_orchestrator();
+        assert!(orch.current_kernel.is_none());
+        assert_eq!(orch.vm_manager.state(), VmState::Stopped);
     }
 
     #[test]

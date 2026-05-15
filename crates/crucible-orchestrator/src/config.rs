@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use serde::Deserialize;
 use std::path::Path;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct CrucibleConfig {
     pub orchestrator: OrchestratorConfig,
     pub vm: VmConfig,
@@ -12,7 +12,7 @@ pub struct CrucibleConfig {
     pub agents: AgentsConfig,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct OrchestratorConfig {
     pub db_path: String,
     pub artifact_dir: String,
@@ -22,7 +22,7 @@ pub struct OrchestratorConfig {
     pub cycle_cooldown_secs: u64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct VmConfig {
     pub kernel_src: String,
     pub guest_rootfs: String,
@@ -37,7 +37,7 @@ pub struct VmConfig {
     pub vsock_cid: u32,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct MeasurementConfig {
     #[serde(default = "default_runs_per_phase")]
     pub runs_per_phase: u32,
@@ -51,7 +51,7 @@ pub struct MeasurementConfig {
     pub max_stddev_pct: f64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct AgentsConfig {
     #[serde(default = "default_model")]
     pub model: String,
@@ -65,7 +65,7 @@ pub struct AgentsConfig {
     pub game_player: GamePlayerConfig,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct OptimizerConfig {
     #[serde(default = "default_max_attempts")]
     pub max_attempts_per_bottleneck: u32,
@@ -73,7 +73,7 @@ pub struct OptimizerConfig {
     pub allowed_layers: Vec<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct GamePlayerConfig {
     #[serde(default)]
     pub enabled: bool,
