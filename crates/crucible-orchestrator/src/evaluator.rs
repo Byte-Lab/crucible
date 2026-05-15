@@ -57,11 +57,21 @@ fn variance(data: &[f64]) -> f64 {
     data.iter().map(|x| (x - m).powi(2)).sum::<f64>() / (n - 1.0)
 }
 
-pub fn welch_t_test(a: &[f64], b: &[f64]) -> TTestResult {
+/// Welch's t-test for unequal variances. Returns `None` when the input is
+/// degenerate: fewer than 2 samples per side, zero variance on either side,
+/// or non-finite Satterthwaite degrees of freedom. Callers should treat
+/// `None` as inconclusive (typically `Verdict::Neutral`).
+pub fn welch_t_test(a: &[f64], b: &[f64]) -> Option<TTestResult> {
+    if a.len() < 2 || b.len() < 2 {
+        return None;
+    }
     let mean_a = mean(a);
     let mean_b = mean(b);
     let var_a = variance(a);
     let var_b = variance(b);
+    if var_a <= f64::EPSILON || var_b <= f64::EPSILON {
+        return None;
+    }
     let n_a = a.len() as f64;
     let n_b = b.len() as f64;
 
@@ -70,19 +80,22 @@ pub fn welch_t_test(a: &[f64], b: &[f64]) -> TTestResult {
 
     // Satterthwaite degrees of freedom
     let numerator = (var_a / n_a + var_b / n_b).powi(2);
-    let denominator = (var_a / n_a).powi(2) / (n_a - 1.0)
-        + (var_b / n_b).powi(2) / (n_b - 1.0);
+    let denominator =
+        (var_a / n_a).powi(2) / (n_a - 1.0) + (var_b / n_b).powi(2) / (n_b - 1.0);
     let df = numerator / denominator;
+    if !df.is_finite() || df <= 0.0 {
+        return None;
+    }
 
-    let dist = StudentsT::new(0.0, 1.0, df).unwrap();
+    let dist = StudentsT::new(0.0, 1.0, df).ok()?;
     let p_value = 2.0 * (1.0 - dist.cdf(t_statistic.abs()));
 
-    TTestResult {
+    Some(TTestResult {
         t_statistic,
         degrees_of_freedom: df,
         p_value,
         significant: p_value < 0.05,
-    }
+    })
 }
 
 pub fn cohens_d(a: &[f64], b: &[f64]) -> f64 {
@@ -97,6 +110,9 @@ pub fn cohens_d(a: &[f64], b: &[f64]) -> f64 {
     (mean_a - mean_b) / pooled_sd
 }
 
+/// Evaluate a single metric. Degenerate inputs (too few samples, zero variance)
+/// produce a delta-only `Neutral` verdict with a placeholder `TTestResult` so
+/// downstream consumers always get a row.
 pub fn evaluate_metric(
     metric: &str,
     baseline: &[f64],
@@ -104,16 +120,44 @@ pub fn evaluate_metric(
     lower_is_better: bool,
     config: &EvalConfig,
 ) -> MetricEvaluation {
-    let baseline_mean = mean(baseline);
-    let comparison_mean = mean(comparison);
-    let delta_pct = (comparison_mean - baseline_mean) / baseline_mean * 100.0;
-    let t_test = welch_t_test(baseline, comparison);
+    let baseline_mean = if baseline.is_empty() {
+        0.0
+    } else {
+        mean(baseline)
+    };
+    let comparison_mean = if comparison.is_empty() {
+        0.0
+    } else {
+        mean(comparison)
+    };
+    let delta_pct = if baseline_mean.abs() > f64::EPSILON {
+        (comparison_mean - baseline_mean) / baseline_mean * 100.0
+    } else {
+        0.0
+    };
+
+    let Some(t_test) = welch_t_test(baseline, comparison) else {
+        return MetricEvaluation {
+            metric: metric.to_string(),
+            baseline_mean,
+            comparison_mean,
+            delta_pct,
+            t_test: TTestResult {
+                t_statistic: 0.0,
+                degrees_of_freedom: 0.0,
+                p_value: 1.0,
+                significant: false,
+            },
+            cohens_d: 0.0,
+            verdict: Verdict::Neutral,
+        };
+    };
+
     let d = cohens_d(baseline, comparison);
 
     let verdict = if t_test.p_value >= config.significance_threshold {
         Verdict::Neutral
     } else {
-        // Determine if the change is in the right direction
         let improved = if lower_is_better {
             comparison_mean < baseline_mean
         } else {
@@ -148,7 +192,7 @@ mod tests {
     fn welch_t_test_significant_difference() {
         let baseline = vec![60.0, 61.0, 59.0, 60.5, 60.2];
         let comparison = vec![70.0, 71.0, 69.0, 70.5, 70.2];
-        let result = welch_t_test(&baseline, &comparison);
+        let result = welch_t_test(&baseline, &comparison).expect("non-degenerate");
         assert!(result.p_value < 0.05);
         assert!(result.significant);
     }
@@ -157,9 +201,22 @@ mod tests {
     fn welch_t_test_no_significant_difference() {
         let baseline = vec![60.0, 61.0, 59.0, 60.5, 60.2];
         let comparison = vec![60.1, 60.8, 59.2, 60.6, 60.0];
-        let result = welch_t_test(&baseline, &comparison);
+        let result = welch_t_test(&baseline, &comparison).expect("non-degenerate");
         assert!(result.p_value > 0.05);
         assert!(!result.significant);
+    }
+
+    #[test]
+    fn welch_t_test_returns_none_on_zero_variance() {
+        let baseline = vec![60.0, 60.0, 60.0, 60.0];
+        let comparison = vec![70.0, 70.0, 70.0, 70.0];
+        assert!(welch_t_test(&baseline, &comparison).is_none());
+    }
+
+    #[test]
+    fn welch_t_test_returns_none_on_too_few_samples() {
+        assert!(welch_t_test(&[60.0], &[70.0, 71.0]).is_none());
+        assert!(welch_t_test(&[60.0, 61.0], &[70.0]).is_none());
     }
 
     #[test]
@@ -211,6 +268,32 @@ mod tests {
         let baseline = vec![60.0, 61.0, 59.0, 60.5, 60.2];
         let comparison = vec![60.1, 60.8, 59.2, 60.6, 60.0];
         let result = evaluate_metric("fps_avg", &baseline, &comparison, false, &config);
+        assert_eq!(result.verdict, Verdict::Neutral);
+    }
+
+    #[test]
+    fn evaluate_metric_zero_variance_neutral() {
+        let config = EvalConfig {
+            significance_threshold: 0.05,
+            effect_size_threshold: 0.5,
+        };
+        let baseline = vec![60.0, 60.0, 60.0];
+        let comparison = vec![70.0, 70.0, 70.0];
+        let result = evaluate_metric("fps_avg", &baseline, &comparison, false, &config);
+        assert_eq!(result.verdict, Verdict::Neutral);
+        // delta still reflects the means even when t-test was inconclusive
+        assert!((result.baseline_mean - 60.0).abs() < f64::EPSILON);
+        assert!((result.comparison_mean - 70.0).abs() < f64::EPSILON);
+        assert!((result.delta_pct - 16.666_666_666_666_668).abs() < 1e-9);
+    }
+
+    #[test]
+    fn evaluate_metric_single_sample_neutral() {
+        let config = EvalConfig {
+            significance_threshold: 0.05,
+            effect_size_threshold: 0.5,
+        };
+        let result = evaluate_metric("fps_avg", &[60.0], &[70.0], false, &config);
         assert_eq!(result.verdict, Verdict::Neutral);
     }
 }

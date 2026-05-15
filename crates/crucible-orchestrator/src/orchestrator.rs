@@ -22,64 +22,6 @@ const METRIC_DEFS: &[(&str, bool)] = &[
     ("psi_memory_avg", true),
 ];
 
-/// Score a metric: delegate to t-test based scorer when both sides have
-/// enough samples, otherwise produce a delta-only Neutral verdict.
-fn sample_variance(data: &[f64]) -> f64 {
-    if data.len() < 2 {
-        return 0.0;
-    }
-    let n = data.len() as f64;
-    let m = data.iter().sum::<f64>() / n;
-    data.iter().map(|x| (x - m).powi(2)).sum::<f64>() / (n - 1.0)
-}
-
-fn score_metric(
-    metric: &str,
-    baseline: &[f64],
-    comparison: &[f64],
-    lower_is_better: bool,
-    config: &EvalConfig,
-) -> MetricEvaluation {
-    let var_b = sample_variance(baseline);
-    let var_c = sample_variance(comparison);
-    let usable = baseline.len() >= 2
-        && comparison.len() >= 2
-        && var_b > f64::EPSILON
-        && var_c > f64::EPSILON;
-    if usable {
-        return evaluate_metric(metric, baseline, comparison, lower_is_better, config);
-    }
-    let baseline_mean = if baseline.is_empty() {
-        0.0
-    } else {
-        baseline.iter().sum::<f64>() / baseline.len() as f64
-    };
-    let comparison_mean = if comparison.is_empty() {
-        0.0
-    } else {
-        comparison.iter().sum::<f64>() / comparison.len() as f64
-    };
-    let delta_pct = if baseline_mean.abs() > f64::EPSILON {
-        (comparison_mean - baseline_mean) / baseline_mean * 100.0
-    } else {
-        0.0
-    };
-    MetricEvaluation {
-        metric: metric.to_string(),
-        baseline_mean,
-        comparison_mean,
-        delta_pct,
-        t_test: crate::evaluator::TTestResult {
-            t_statistic: 0.0,
-            degrees_of_freedom: 0.0,
-            p_value: 1.0,
-            significant: false,
-        },
-        cohens_d: 0.0,
-        verdict: Verdict::Neutral,
-    }
-}
-
 fn metric_samples(measurements: &[Measurement], metric: &str) -> Vec<f64> {
     measurements
         .iter()
@@ -286,7 +228,7 @@ impl Orchestrator {
         for (metric, lower_is_better) in METRIC_DEFS {
             let b = metric_samples(&baseline, metric);
             let c = metric_samples(&comparison, metric);
-            let scored = score_metric(metric, &b, &c, *lower_is_better, &cfg);
+            let scored = evaluate_metric(metric, &b, &c, *lower_is_better, &cfg);
             self.db.insert_evaluation(
                 cycle_id,
                 &scored.metric,
