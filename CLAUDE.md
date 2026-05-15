@@ -61,7 +61,13 @@ Idle → SelectGame → ProvisionVm → BaselineMeasurement → Analyze
 
 Transitions are validated by `CycleState::valid_transitions()` and persisted to SQLite via `db.update_cycle_status` *before* the work runs, so a crash mid-state is recoverable. Any cycle error in `run_loop` resets the state machine to `Idle` and continues.
 
-Several states (`ProvisionVm`, `ApplyChanges`, the Accept/Reject decision) are still placeholders — they advance the state and log but do not yet build kernels or apply patches. `vm.rs` and `kernel_builder.rs` are the seams to fill in.
+The full pipeline is wired:
+- `ProvisionVm` calls `Orchestrator::provision_vm` → `KernelBuilder::build_kernel` (cached in `current_kernel`) → `VmManager::boot` → `wait_for_ready` (vsock health check).
+- `BaselineMeasurement` / `ComparisonMeasurement` call the Profiler agent, then `persist_measurement` writes one row per phase to the `measurements` table.
+- `ApplyChanges` calls `KernelBuilder::apply_and_build` (auto-reverts patch on build failure), shuts the VM down, reboots with the new image.
+- `Evaluate` calls `run_evaluation` → per-metric `score_metric` → `db.insert_evaluation` → `determine_overall_verdict`. Branches: `Accept | Marginal | Neutral` → `Accept`; `Regressed` → `Reject`.
+
+What still doesn't work end-to-end: there is no bootable guest rootfs yet, so `cargo run -- --single-cycle` requires real hardware + a populated `kernel_src` + a rootfs at `[vm].guest_rootfs`. There is no e2e smoke test. `Iterate` exists in the state machine but is never reached. `Reject` does not yet revert the applied patch via `KernelBuilder::revert_patch`.
 
 ### Agent dispatch protocol
 
@@ -80,6 +86,10 @@ To add a new agent:
 
 `evaluator.rs` runs Welch's t-test + Cohen's d per metric. `orchestrator::determine_overall_verdict` aggregates per-metric verdicts: **any** `Regressed` blocks the whole cycle; all `Neutral` is `Neutral`; mix of `Accept` and `Neutral` is `Accept`; otherwise `Marginal`. Thresholds come from `[measurement]` in `config/crucible.toml`.
 
+Metrics scored: `fps_avg`, `fps_p1` (higher is better); `frame_time_p99_ms`, `psi_cpu_avg`, `psi_memory_avg` (lower is better). Defined in `METRIC_DEFS` in `orchestrator.rs`.
+
+Gotcha: `evaluator::welch_t_test` panics on zero-variance input (`StudentsT::new` returns `FreedomInvalid`). `orchestrator::score_metric` guards by checking `sample_variance` before delegating, falling back to a delta-only `Neutral` verdict. Real fix belongs in `evaluator.rs`.
+
 ### Configuration
 
 Single source of truth: `config/crucible.toml`, parsed by `config.rs` into `CrucibleConfig`. All numeric/string fields have `serde(default)` fallbacks defined as `default_*` functions — keep those defaults in sync with `config/crucible.toml` if you add a field.
@@ -92,3 +102,4 @@ Hardware-specific values live in `[vm]` (`vfio_device`, `kernel_src`, `guest_roo
 - **Agents do not import `crucible-orchestrator` or talk to SQLite.** All persistence goes through the orchestrator. If an agent needs prior cycle data, the orchestrator passes it in via `TaskEnvelope.context`.
 - The `agents.*` and `guest.*` packages have no `setup.py`/`pyproject` install — they are imported by path. Always set `PYTHONPATH=.` (the workspace root) when running Python directly. The orchestrator does this automatically when spawning agents.
 - Guest-agent RPC is **length-prefixed JSON over vsock** (4-byte big-endian length, then payload), not newline-delimited. See `guest/crucible_guest_agent.py:_recv_message`.
+- Claude-backed agents (anything subclassing `ClaudeAgentBase`) return `{"response": "<final assistant text>"}` in their `ResultEnvelope.result`. The orchestrator uses `parse_agent_response()` to unwrap that envelope, optionally strip ` ```json ` fences, and parse the inner JSON. Use it whenever consuming a Claude agent's structured output.
