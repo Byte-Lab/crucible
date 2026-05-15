@@ -413,10 +413,10 @@ def serve() -> None:
         try:
             while True:
                 raw = _recv_message(conn)
-                cmd = GuestCommand.model_validate(raw)
+                cmd = GuestCommand.from_dict(raw)
                 logger.info("received command: %s", cmd.cmd)
                 resp = handler.handle(cmd)
-                _send_message(conn, resp.model_dump())
+                _send_message(conn, resp.to_dict())
         except ConnectionError:
             logger.info("client disconnected")
         except Exception:

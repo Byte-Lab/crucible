@@ -34,6 +34,12 @@ pub struct VmConfig {
     /// synthetic loop on commodity hardware.
     #[serde(default)]
     pub vfio_device: String,
+    /// Optional host path overlaid into the guest at /opt/crucible/guest
+    /// via vng's --rodir. Lets the orchestrator drive an updated guest
+    /// agent without rebuilding the rootfs every iteration. Empty = no
+    /// overlay, guest uses whatever the rootfs has at /opt/crucible/guest.
+    #[serde(default)]
+    pub guest_payload: String,
     #[serde(default = "default_boot_timeout")]
     pub boot_timeout_secs: u64,
     #[serde(default = "default_vsock_cid")]

@@ -32,6 +32,14 @@ async fn synthetic_cycle_writes_measurements_and_evaluation() {
         .unwrap_or_else(|_| "/home/void/upstream/linux".to_string());
     let rootfs = std::env::var("CRUCIBLE_ROOTFS_PATH")
         .unwrap_or_else(|_| format!("{}/.crucible/rootfs", std::env::var("HOME").unwrap()));
+    let guest_payload = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("guest")
+        .to_string_lossy()
+        .to_string();
 
     let config_path = tmp_dir.path().join("e2e-config.toml");
     let mut f = std::fs::File::create(&config_path).unwrap();
@@ -47,6 +55,7 @@ async fn synthetic_cycle_writes_measurements_and_evaluation() {
         [vm]
         kernel_src = "{kernel}"
         guest_rootfs = "{rootfs}"
+        guest_payload = "{guest_payload}"
         memory = "4G"
         cpus = 4
         vfio_device = ""
@@ -67,6 +76,7 @@ async fn synthetic_cycle_writes_measurements_and_evaluation() {
         art = artifact_dir.display(),
         kernel = kernel_src,
         rootfs = rootfs,
+        guest_payload = guest_payload,
     )
     .unwrap();
 
@@ -74,9 +84,12 @@ async fn synthetic_cycle_writes_measurements_and_evaluation() {
         crucible_orchestrator::config::CrucibleConfig::from_file(&config_path).unwrap();
     let db = crucible_orchestrator::db::Database::open(&db_path).unwrap();
 
-    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let workspace_root = manifest_dir.parent().unwrap().parent().unwrap();
-    let agents_dir = workspace_root.join("agents");
+    let agents_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("agents");
 
     let agent_runner = crucible_orchestrator::agent_runner::AgentRunner::new(
         PathBuf::from("python3"),

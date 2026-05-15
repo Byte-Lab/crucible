@@ -50,7 +50,7 @@ def test_guest_command_run_benchmark_roundtrip():
         args=["--cpu", "4"],
         duration_secs=30,
     )
-    raw = cmd.model_dump_json(exclude_none=True)
+    raw = cmd.to_json(exclude_none=True)
     parsed = json.loads(raw)
     assert parsed == {
         "cmd": "run_benchmark",
@@ -58,7 +58,7 @@ def test_guest_command_run_benchmark_roundtrip():
         "name": "stress-ng",
         "duration_secs": 30,
     }
-    restored = GuestCommand.model_validate_json(raw)
+    restored = GuestCommand.from_json(raw)
     assert restored.cmd == "run_benchmark"
     assert restored.name == "stress-ng"
     assert restored.args == ["--cpu", "4"]

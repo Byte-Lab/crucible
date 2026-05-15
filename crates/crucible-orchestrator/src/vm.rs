@@ -56,7 +56,7 @@ impl VmManager {
             "cd /opt/crucible && PYTHONPATH=/opt/crucible \
              exec python3 -m guest.crucible_guest_agent"
                 .to_string();
-        vec![
+        let mut args = vec![
             "vng".to_string(),
             "--memory".to_string(),
             self.config.memory.clone(),
@@ -64,10 +64,19 @@ impl VmManager {
             self.config.cpus.to_string(),
             "--root".to_string(),
             self.config.guest_rootfs.clone(),
-            "--exec".to_string(),
-            guest_cmd,
-            format!("--qemu-opts={}", qemu_opts),
-        ]
+        ];
+        let payload = self.config.guest_payload.trim();
+        if !payload.is_empty() {
+            // virtme-ng exposes the host dir read-only inside the guest at
+            // /opt/crucible/guest. Overlays whatever the rootfs has there,
+            // so updating the agent doesn't require a rootfs rebuild.
+            args.push("--rodir".to_string());
+            args.push(format!("/opt/crucible/guest={}", payload));
+        }
+        args.push("--exec".to_string());
+        args.push(guest_cmd);
+        args.push(format!("--qemu-opts={}", qemu_opts));
+        args
     }
 
     /// Kernel-source path the vng invocation must be run from.
