@@ -83,6 +83,7 @@ fi
 
 PACKAGES=(
     systemd-sysv
+    udev
     python3
     python3-pydantic
     stress-ng
