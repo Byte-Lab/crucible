@@ -49,7 +49,7 @@ async fn synthetic_cycle_writes_measurements_and_evaluation() {
         guest_rootfs = "{rootfs}"
         memory = "4G"
         cpus = 4
-        vfio_device = "00:00.0"
+        vfio_device = ""
         boot_timeout_secs = 180
         vsock_cid = 3
 

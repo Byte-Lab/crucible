@@ -30,6 +30,9 @@ pub struct VmConfig {
     pub memory: String,
     #[serde(default = "default_cpus")]
     pub cpus: u32,
+    /// Empty string or "none" skips GPU passthrough — needed for the
+    /// synthetic loop on commodity hardware.
+    #[serde(default)]
     pub vfio_device: String,
     #[serde(default = "default_boot_timeout")]
     pub boot_timeout_secs: u64,

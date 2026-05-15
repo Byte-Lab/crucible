@@ -32,9 +32,18 @@ impl VmManager {
     }
 
     pub fn build_boot_command(&self, kernel_path: &str) -> Vec<String> {
+        // Skip vfio-pci entirely when no device is configured. Required so
+        // the synthetic loop runs on commodity hardware without GPU
+        // passthrough; the real game-mode milestone still sets a device.
+        let vfio_dev = self.config.vfio_device.trim();
+        let vfio_opt = if vfio_dev.is_empty() || vfio_dev.eq_ignore_ascii_case("none") {
+            String::new()
+        } else {
+            format!("-device vfio-pci,host={} ", vfio_dev)
+        };
         let qemu_opts = format!(
-            "-device vfio-pci,host={} -m {} -smp {} -device vhost-vsock-pci,guest-cid={}",
-            self.config.vfio_device,
+            "{}-m {} -smp {} -device vhost-vsock-pci,guest-cid={}",
+            vfio_opt,
             self.config.memory,
             self.config.cpus,
             self.config.vsock_cid,
@@ -165,5 +174,34 @@ mod tests {
         let config = test_vm_config();
         let manager = VmManager::new(config);
         assert!(matches!(manager.state(), VmState::Stopped));
+    }
+
+    #[test]
+    fn build_vng_boot_command_skips_vfio_when_unset() {
+        let toml_str = r#"
+            kernel_src = "/k"
+            guest_rootfs = "/r"
+            vfio_device = ""
+        "#;
+        let config: crate::config::VmConfig = toml::from_str(toml_str).unwrap();
+        let manager = VmManager::new(config);
+        let cmd = manager.build_boot_command("/path/to/bzImage");
+        let joined = cmd.join(" ");
+        assert!(!joined.contains("vfio-pci"), "joined cmd: {}", joined);
+        assert!(joined.contains("vhost-vsock-pci"));
+    }
+
+    #[test]
+    fn build_vng_boot_command_skips_vfio_when_none() {
+        let toml_str = r#"
+            kernel_src = "/k"
+            guest_rootfs = "/r"
+            vfio_device = "none"
+        "#;
+        let config: crate::config::VmConfig = toml::from_str(toml_str).unwrap();
+        let manager = VmManager::new(config);
+        let cmd = manager.build_boot_command("/path/to/bzImage");
+        let joined = cmd.join(" ");
+        assert!(!joined.contains("vfio-pci"), "joined cmd: {}", joined);
     }
 }
