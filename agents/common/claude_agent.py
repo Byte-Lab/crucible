@@ -102,7 +102,17 @@ class ClaudeAgentBase(AgentBase):
             # `task.config.max_retries` historically controlled the
             # anthropic SDK's retry count. Threading it through to the
             # bundled `claude` CLI keeps the same knob meaningful.
-            "env": {"CLAUDE_CODE_MAX_RETRIES": str(task.config.max_retries)},
+            #
+            # Scrub ANTHROPIC_API_KEY: the SDK merges parent env into the
+            # CLI subprocess, so a leaked console key in the host env
+            # silently overrides the user's OAuth Pro/Max session and bills
+            # against the wrong account (or fails with `billing_error` when
+            # the leaked account has no credit). An empty value tells the
+            # CLI to fall back to its stored OAuth credentials.
+            "env": {
+                "CLAUDE_CODE_MAX_RETRIES": str(task.config.max_retries),
+                "ANTHROPIC_API_KEY": "",
+            },
         }
         if sdk_tools:
             options_kwargs["mcp_servers"] = {

@@ -1,7 +1,9 @@
 //! End-to-end smoke test for the synthetic loop.
 //!
 //! Skipped by default. Set `CRUCIBLE_E2E=1` to run, plus:
-//!   - `ANTHROPIC_API_KEY` for the Claude-backed agents
+//!   - the bundled `claude` CLI must have been logged in via `claude /login`
+//!     once on this machine; Claude-backed agents now bill against the user's
+//!     Pro/Max plan via `claude-agent-sdk` (no `ANTHROPIC_API_KEY` is read)
 //!   - `vng` on PATH (virtme-ng)
 //!   - `CRUCIBLE_KERNEL_SRC` (default `/home/void/upstream/linux`) — checked-out
 //!     kernel source tree usable by `KernelBuilder::build_kernel`
@@ -130,9 +132,6 @@ async fn synthetic_cycle_writes_measurements_and_evaluation() {
 }
 
 fn check_prerequisites() -> Result<(), String> {
-    if std::env::var("ANTHROPIC_API_KEY").is_err() {
-        return Err("ANTHROPIC_API_KEY is not set".to_string());
-    }
     if which("vng").is_none() {
         return Err("vng (virtme-ng) is not on PATH".to_string());
     }

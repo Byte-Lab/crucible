@@ -8,6 +8,12 @@ from agents.optimizer.tools import make_optimizer_tools
 
 
 class OptimizerAgent(ClaudeAgentBase):
+    # Optimizer chains read_source_file/search_kernel_source/edit_file calls
+    # to navigate the kernel tree and apply patches. On a moderately complex
+    # bottleneck this routinely needs more than the 40-turn base cap; the
+    # `timeout_seconds` subprocess kill (default 600s) is the real safety net.
+    MAX_TOOL_ROUNDS = 80
+
     def system_prompt(self) -> str:
         return """You are the Optimizer agent for Crucible. Generate code changes to address performance bottlenecks.
 Layers: kernel (scheduler, memory, IO), userspace (Mesa, Wine, gamescope), tuning (sysctl).
