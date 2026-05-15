@@ -50,20 +50,32 @@ def _parse_acf_appid(acf_path: str) -> int | None:
 def make_game_selector_tools(registry: ToolRegistry) -> None:
     """Register game-selector tools into the given registry."""
 
-    @registry.tool(description="List installed Steam games by scanning the Steam library for appmanifest ACF files.")
-    def list_steam_games(library_path: str = "~/.steam/steam/steamapps") -> dict:
-        expanded = os.path.expanduser(library_path)
+    @registry.tool(description="List installed Steam games by scanning the Steam library for appmanifest ACF files. Searches common paths if no path given.")
+    def list_steam_games(library_path: str = "") -> dict:
+        search_paths = [
+            os.path.expanduser("~/snap/steam/common/.local/share/Steam/steamapps"),
+            os.path.expanduser("~/.local/share/Steam/steamapps"),
+            os.path.expanduser("~/.steam/steam/steamapps"),
+        ]
+        if library_path:
+            search_paths = [os.path.expanduser(library_path)]
+
         games: list[dict[str, Any]] = []
-        if not os.path.isdir(expanded):
-            return {"games": [], "error": f"directory not found: {expanded}"}
-        for entry in sorted(os.listdir(expanded)):
-            if entry.startswith("appmanifest_") and entry.endswith(".acf"):
-                full_path = os.path.join(expanded, entry)
-                app_id = _parse_acf_appid(full_path)
-                name = _parse_acf_name(full_path)
-                if app_id is not None:
-                    games.append({"app_id": app_id, "name": name or "unknown"})
-        return {"games": games}
+        searched: list[str] = []
+        for expanded in search_paths:
+            searched.append(expanded)
+            if not os.path.isdir(expanded):
+                continue
+            for entry in sorted(os.listdir(expanded)):
+                if entry.startswith("appmanifest_") and entry.endswith(".acf"):
+                    full_path = os.path.join(expanded, entry)
+                    app_id = _parse_acf_appid(full_path)
+                    name = _parse_acf_name(full_path)
+                    if app_id is not None:
+                        games.append({"app_id": app_id, "name": name or "unknown"})
+        if not games:
+            return {"games": [], "searched_paths": searched, "error": "no games found"}
+        return {"games": games, "count": len(games)}
 
     @registry.tool(description="Check whether a game has a known built-in benchmark mode.")
     def check_benchmark_support(app_id: int) -> dict:

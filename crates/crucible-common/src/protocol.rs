@@ -106,7 +106,7 @@ mod tests {
             agent: AgentName::Analyzer,
             context: serde_json::json!({"game_id": 1091500}),
             config: AgentConfig {
-                model: "claude-sonnet-4-6-20250414".to_string(),
+                model: "claude-sonnet-4-20250514".to_string(),
                 max_tokens: 8192,
                 timeout_seconds: 300,
             },

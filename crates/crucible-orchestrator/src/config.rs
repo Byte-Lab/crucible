@@ -119,7 +119,7 @@ fn default_max_stddev() -> f64 {
     10.0
 }
 fn default_model() -> String {
-    "claude-sonnet-4-6-20250414".to_string()
+    "claude-sonnet-4-20250514".to_string()
 }
 fn default_max_retries() -> u32 {
     3
@@ -203,7 +203,7 @@ mod tests {
         assert_eq!(config.vm.kernel_src, "/home/void/upstream/linux");
         assert_eq!(config.vm.memory, "16G"); // default
         assert_eq!(config.measurement.runs_per_phase, 5); // default
-        assert_eq!(config.agents.model, "claude-sonnet-4-6-20250414"); // default
+        assert_eq!(config.agents.model, "claude-sonnet-4-20250514"); // default
     }
 
     #[test]

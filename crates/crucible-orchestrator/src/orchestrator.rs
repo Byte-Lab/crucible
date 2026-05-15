@@ -94,7 +94,18 @@ impl Orchestrator {
             self.config.agents.timeout_secs,
         );
         let result = self.agent_runner.run_agent(task).await?;
-        Ok(result.result)
+        match result.status {
+            crucible_common::protocol::TaskStatus::Success => Ok(result.result),
+            crucible_common::protocol::TaskStatus::Failure => {
+                let err_msg = result.result["error"]
+                    .as_str()
+                    .unwrap_or("unknown error");
+                anyhow::bail!("agent {:?} failed: {}", agent, err_msg);
+            }
+            crucible_common::protocol::TaskStatus::NeedsInput => {
+                anyhow::bail!("agent {:?} needs input (not supported yet)", agent);
+            }
+        }
     }
 
     pub async fn run_cycle(&mut self) -> Result<()> {
@@ -108,10 +119,19 @@ impl Orchestrator {
             "action": "select_game",
         });
         let game_result = self.run_agent(AgentName::GameSelector, game_context).await?;
-        let game_name = game_result["game_name"]
+
+        // The agent returns {"response": "<json string>"} -- try to parse the inner JSON
+        let game_info = game_result["response"]
             .as_str()
+            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
+            .unwrap_or(game_result.clone());
+
+        let game_name = game_info["name"]
+            .as_str()
+            .or_else(|| game_info["game_name"].as_str())
+            .or_else(|| game_result["response"].as_str())
             .unwrap_or("unknown_game");
-        let game_app_id = game_result["app_id"].as_i64().unwrap_or(0);
+        let game_app_id = game_info["app_id"].as_i64().unwrap_or(0);
 
         let cycle_id = self.db.create_cycle(game_name, game_app_id)?;
         self.db
@@ -141,7 +161,7 @@ impl Orchestrator {
             "runs": self.config.measurement.runs_per_phase,
         });
         let _baseline_result = self
-            .run_agent(AgentName::GamePlayer, baseline_context)
+            .run_agent(AgentName::Profiler, baseline_context)
             .await?;
 
         // Analyze
@@ -207,7 +227,7 @@ impl Orchestrator {
             "runs": self.config.measurement.runs_per_phase,
         });
         let _comparison_result = self
-            .run_agent(AgentName::GamePlayer, comparison_context)
+            .run_agent(AgentName::Profiler, comparison_context)
             .await?;
 
         // Evaluate
@@ -253,14 +273,14 @@ impl Orchestrator {
 
             match self.run_cycle().await {
                 Ok(()) => {
-                    cycles_completed += 1;
-                    tracing::info!(cycles = cycles_completed, "cycle completed successfully");
+                    tracing::info!(cycles = cycles_completed + 1, "cycle completed successfully");
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "cycle failed, resetting state machine");
                     self.state_machine = StateMachine::new();
                 }
             }
+            cycles_completed += 1;
 
             if !unlimited && cycles_completed >= max_cycles {
                 break;
@@ -288,7 +308,7 @@ mod tests {
         let task = build_task_envelope(
             AgentName::Analyzer,
             serde_json::json!({"game": "test"}),
-            "claude-sonnet-4-6-20250414",
+            "claude-sonnet-4-20250514",
             8192,
             300,
         );

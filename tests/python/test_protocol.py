@@ -17,7 +17,7 @@ def test_task_envelope_from_json():
         "agent": "analyzer",
         "context": {"game_id": 1091500},
         "config": {
-            "model": "claude-sonnet-4-6-20250414",
+            "model": "claude-sonnet-4-20250514",
             "max_tokens": 8192,
             "timeout_seconds": 300,
         },

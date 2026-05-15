@@ -11,7 +11,7 @@ def make_task(context=None):
     task = TaskEnvelope(
         task_id=uuid.uuid4(), agent="test",
         context=context or {},
-        config=AgentConfig(model="claude-sonnet-4-6-20250414", max_tokens=8192, timeout_seconds=300),
+        config=AgentConfig(model="claude-sonnet-4-20250514", max_tokens=8192, timeout_seconds=300),
     )
     return task.model_dump_json()
 

@@ -12,7 +12,7 @@ def make_task(context: dict | None = None) -> str:
         agent="echo",
         context=context or {"message": "hello"},
         config=AgentConfig(
-            model="claude-sonnet-4-6-20250414",
+            model="claude-sonnet-4-20250514",
             max_tokens=8192,
             timeout_seconds=300,
         ),

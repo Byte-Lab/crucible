@@ -21,9 +21,9 @@ effect_size_threshold = 0.5
 max_stddev_pct = 10
 
 [agents]
-model = "claude-sonnet-4-6-20250414"
+model = "claude-sonnet-4-20250514"
 max_retries = 3
-timeout_secs = 300
+timeout_secs = 600
 
 [agents.optimizer]
 max_attempts_per_bottleneck = 3
