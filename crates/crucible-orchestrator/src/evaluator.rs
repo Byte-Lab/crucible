@@ -1,7 +1,7 @@
 use statrs::distribution::{ContinuousCDF, StudentsT};
 use std::fmt;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
     Accept,
     Marginal,

@@ -103,6 +103,15 @@ fn json_f64(value: &serde_json::Value, key: &str) -> f64 {
         .unwrap_or(0.0)
 }
 
+/// Returns true iff we should loop back from Evaluate through Iterate to
+/// Analyze and re-run the optimizer. A `Marginal` verdict means the patch
+/// neither cleanly won nor regressed — worth another attempt with the
+/// previous result in the Analyzer's context. We stop once we've hit
+/// `max_attempts` so a stuck-in-marginal bottleneck doesn't loop forever.
+pub fn should_iterate(verdict: Verdict, attempt_number: u32, max_attempts: u32) -> bool {
+    matches!(verdict, Verdict::Marginal) && attempt_number < max_attempts
+}
+
 /// Determine overall verdict from metric evaluations.
 /// Any regression blocks. All accept (or neutral) = Accept. Mixed = Marginal.
 pub fn determine_overall_verdict(evals: &[MetricEvaluation]) -> Verdict {
@@ -381,121 +390,213 @@ impl Orchestrator {
         self.persist_measurement(cycle_id, "baseline", &baseline_result)?;
         let baseline_metrics = parse_agent_response(&baseline_result);
 
-        // Analyze
-        self.state_machine
-            .transition(CycleState::Analyze)
-            .map_err(|e| anyhow::anyhow!(e))?;
-        self.db
-            .update_cycle_status(cycle_id, CycleState::Analyze.as_str())?;
-        tracing::info!(state = %self.state_machine.state(), "analyzing performance data");
+        // Iteration loop: Analyze → GenerateOptimization → ApplyChanges →
+        // ComparisonMeasurement → Evaluate. A Marginal verdict re-enters via
+        // Iterate → Analyze with the prior attempts threaded through context
+        // so the Analyzer can pivot. Bounded by the configured per-bottleneck
+        // attempt cap so a stuck-in-marginal cycle terminates.
+        let max_attempts = self
+            .config
+            .agents
+            .optimizer
+            .max_attempts_per_bottleneck
+            .max(1);
+        let mut iteration: u32 = 0;
+        let mut previous_attempts: Vec<serde_json::Value> = Vec::new();
+        let (overall, applied_patch): (Verdict, Option<String>) = loop {
+            let attempt_number = iteration + 1;
 
-        let analyze_context = serde_json::json!({
-            "action": "analyze",
-            "game_name": game_name,
-            "cycle_id": cycle_id,
-            "metrics": baseline_metrics,
-        });
-        let analysis_result = self
-            .run_agent(AgentName::Analyzer, analyze_context)
-            .await?;
-        let analysis = parse_agent_response(&analysis_result);
-
-        // GenerateOptimization
-        self.state_machine
-            .transition(CycleState::GenerateOptimization)
-            .map_err(|e| anyhow::anyhow!(e))?;
-        self.db
-            .update_cycle_status(cycle_id, CycleState::GenerateOptimization.as_str())?;
-        tracing::info!(state = %self.state_machine.state(), "generating optimization");
-
-        // Defensive cleanup: if a prior cycle crashed between edit_file and
-        // finalize_patch, the kernel tree may be dirty. The optimizer's
-        // finalize_patch tool relies on diffing against a clean base, so
-        // reset the working tree before invoking it.
-        if let Err(e) = self.kernel_builder.revert_patch().await {
-            tracing::warn!(error = %e, "pre-optimizer revert_patch failed; continuing");
-        }
-
-        // Hand the analyzer's bottleneck + optimization_targets to the
-        // Optimizer so it doesn't fish through the kernel tree blindly.
-        // Without this the LLM burns its whole timeout reading files at
-        // random looking for something to change.
-        let optimize_context = serde_json::json!({
-            "action": "optimize",
-            "game_name": game_name,
-            "cycle_id": cycle_id,
-            "bottleneck": analysis,
-            "kernel_src": self.config.vm.kernel_src,
-            "attempt_number": 1,
-        });
-        let optimization = self
-            .run_agent(AgentName::Optimizer, optimize_context)
-            .await?;
-
-        // ApplyChanges
-        self.state_machine
-            .transition(CycleState::ApplyChanges)
-            .map_err(|e| anyhow::anyhow!(e))?;
-        self.db
-            .update_cycle_status(cycle_id, CycleState::ApplyChanges.as_str())?;
-        tracing::info!(state = %self.state_machine.state(), "applying changes");
-
-        let mut applied_patch = extract_patch_path(&optimization);
-        if let Some(patch_path) = applied_patch.as_deref() {
-            let parsed_opt = parse_agent_response(&optimization);
-            let layer = optimization["layer"]
-                .as_str()
-                .or_else(|| parsed_opt["layer"].as_str())
-                .unwrap_or("kernel");
-            self.db.insert_patch(cycle_id, layer, patch_path)?;
-            tracing::info!(patch = patch_path, layer, "patch recorded");
-            // Soft-fail on apply: a corrupt or non-applicable patch must not
-            // crash the cycle. Comparison runs against the unchanged kernel,
-            // evaluator will report Neutral, and the cycle terminates cleanly.
-            if let Err(e) = self.apply_changes(patch_path).await {
-                tracing::warn!(
-                    patch = patch_path,
-                    error = %e,
-                    "apply_changes failed; continuing with baseline kernel",
+            // Re-entry: Evaluate → Iterate → Analyze. First pass arrives from
+            // BaselineMeasurement, which already permits the Analyze
+            // transition directly.
+            if iteration > 0 {
+                self.state_machine
+                    .transition(CycleState::Iterate)
+                    .map_err(|e| anyhow::anyhow!(e))?;
+                self.db
+                    .update_cycle_status(cycle_id, CycleState::Iterate.as_str())?;
+                tracing::info!(
+                    state = %self.state_machine.state(),
+                    iteration,
+                    "iterating on marginal verdict"
                 );
-                applied_patch = None;
             }
-        } else {
-            tracing::warn!("no patch_path in optimization output, skipping apply");
-        }
 
-        // ComparisonMeasurement
-        self.state_machine
-            .transition(CycleState::ComparisonMeasurement)
-            .map_err(|e| anyhow::anyhow!(e))?;
-        self.db
-            .update_cycle_status(cycle_id, CycleState::ComparisonMeasurement.as_str())?;
-        tracing::info!(state = %self.state_machine.state(), "running comparison measurement");
+            // Analyze
+            self.state_machine
+                .transition(CycleState::Analyze)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            self.db
+                .update_cycle_status(cycle_id, CycleState::Analyze.as_str())?;
+            tracing::info!(
+                state = %self.state_machine.state(),
+                attempt = attempt_number,
+                "analyzing performance data"
+            );
 
-        let comparison_context = serde_json::json!({
-            "action": "measure",
-            "phase": "comparison",
-            "game": game_name,
-            "runs": self.config.measurement.runs_per_phase,
-            "workload_kind": self.config.measurement.mode,
-            "benchmark_args": self.config.measurement.benchmark_args,
-            "duration_secs": self.config.measurement.benchmark_duration_secs,
-            "vsock_cid": self.config.vm.vsock_cid,
-        });
-        let comparison_result = self
-            .run_agent(AgentName::Profiler, comparison_context)
-            .await?;
-        self.persist_measurement(cycle_id, "comparison", &comparison_result)?;
+            let mut analyze_context = serde_json::json!({
+                "action": "analyze",
+                "game_name": game_name,
+                "cycle_id": cycle_id,
+                "metrics": baseline_metrics,
+                "attempt_number": attempt_number,
+            });
+            if !previous_attempts.is_empty() {
+                analyze_context["previous_attempts"] =
+                    serde_json::Value::Array(previous_attempts.clone());
+            }
+            let analysis_result = self
+                .run_agent(AgentName::Analyzer, analyze_context)
+                .await?;
+            let analysis = parse_agent_response(&analysis_result);
 
-        // Evaluate
-        self.state_machine
-            .transition(CycleState::Evaluate)
-            .map_err(|e| anyhow::anyhow!(e))?;
-        self.db
-            .update_cycle_status(cycle_id, CycleState::Evaluate.as_str())?;
-        tracing::info!(state = %self.state_machine.state(), "evaluating results");
+            // GenerateOptimization
+            self.state_machine
+                .transition(CycleState::GenerateOptimization)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            self.db
+                .update_cycle_status(cycle_id, CycleState::GenerateOptimization.as_str())?;
+            tracing::info!(
+                state = %self.state_machine.state(),
+                attempt = attempt_number,
+                "generating optimization"
+            );
 
-        let overall = self.run_evaluation(cycle_id)?;
+            // Defensive cleanup: if a prior cycle crashed between edit_file
+            // and finalize_patch — or the prior iteration's marginal patch
+            // is still on disk — the kernel tree may be dirty. The
+            // optimizer's finalize_patch tool relies on diffing against a
+            // clean base, so reset the working tree before invoking it.
+            if let Err(e) = self.kernel_builder.revert_patch().await {
+                tracing::warn!(error = %e, "pre-optimizer revert_patch failed; continuing");
+            }
+
+            // Hand the analyzer's bottleneck + optimization_targets to the
+            // Optimizer so it doesn't fish through the kernel tree blindly.
+            // Without this the LLM burns its whole timeout reading files at
+            // random looking for something to change.
+            let mut optimize_context = serde_json::json!({
+                "action": "optimize",
+                "game_name": game_name,
+                "cycle_id": cycle_id,
+                "bottleneck": analysis,
+                "kernel_src": self.config.vm.kernel_src,
+                "attempt_number": attempt_number,
+            });
+            if !previous_attempts.is_empty() {
+                optimize_context["previous_attempts"] =
+                    serde_json::Value::Array(previous_attempts.clone());
+            }
+            let optimization = self
+                .run_agent(AgentName::Optimizer, optimize_context)
+                .await?;
+
+            // ApplyChanges
+            self.state_machine
+                .transition(CycleState::ApplyChanges)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            self.db
+                .update_cycle_status(cycle_id, CycleState::ApplyChanges.as_str())?;
+            tracing::info!(
+                state = %self.state_machine.state(),
+                attempt = attempt_number,
+                "applying changes"
+            );
+
+            let mut applied_patch: Option<String> = extract_patch_path(&optimization);
+            if let Some(patch_path) = applied_patch.as_deref() {
+                let parsed_opt = parse_agent_response(&optimization);
+                let layer = optimization["layer"]
+                    .as_str()
+                    .or_else(|| parsed_opt["layer"].as_str())
+                    .unwrap_or("kernel");
+                self.db.insert_patch(cycle_id, layer, patch_path)?;
+                tracing::info!(
+                    patch = patch_path,
+                    layer,
+                    attempt = attempt_number,
+                    "patch recorded"
+                );
+                // Soft-fail on apply: a corrupt or non-applicable patch must
+                // not crash the cycle. Comparison runs against the unchanged
+                // kernel, evaluator will report Neutral, and the cycle
+                // terminates cleanly.
+                if let Err(e) = self.apply_changes(patch_path).await {
+                    tracing::warn!(
+                        patch = patch_path,
+                        error = %e,
+                        "apply_changes failed; continuing with baseline kernel",
+                    );
+                    applied_patch = None;
+                }
+            } else {
+                tracing::warn!(
+                    attempt = attempt_number,
+                    "no patch_path in optimization output, skipping apply"
+                );
+            }
+
+            // ComparisonMeasurement
+            self.state_machine
+                .transition(CycleState::ComparisonMeasurement)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            self.db
+                .update_cycle_status(cycle_id, CycleState::ComparisonMeasurement.as_str())?;
+            tracing::info!(
+                state = %self.state_machine.state(),
+                attempt = attempt_number,
+                "running comparison measurement"
+            );
+
+            let comparison_context = serde_json::json!({
+                "action": "measure",
+                "phase": "comparison",
+                "game": game_name,
+                "runs": self.config.measurement.runs_per_phase,
+                "workload_kind": self.config.measurement.mode,
+                "benchmark_args": self.config.measurement.benchmark_args,
+                "duration_secs": self.config.measurement.benchmark_duration_secs,
+                "vsock_cid": self.config.vm.vsock_cid,
+            });
+            let comparison_result = self
+                .run_agent(AgentName::Profiler, comparison_context)
+                .await?;
+            self.persist_measurement(cycle_id, "comparison", &comparison_result)?;
+
+            // Evaluate
+            self.state_machine
+                .transition(CycleState::Evaluate)
+                .map_err(|e| anyhow::anyhow!(e))?;
+            self.db
+                .update_cycle_status(cycle_id, CycleState::Evaluate.as_str())?;
+            tracing::info!(
+                state = %self.state_machine.state(),
+                attempt = attempt_number,
+                "evaluating results"
+            );
+
+            let attempt_verdict = self.run_evaluation(cycle_id)?;
+            tracing::info!(
+                attempt = attempt_number,
+                verdict = %attempt_verdict,
+                "attempt verdict"
+            );
+
+            if should_iterate(attempt_verdict, attempt_number, max_attempts) {
+                // Stash this attempt for the next analyzer pass. Patch path
+                // is preserved even though the next pre-optimizer revert
+                // will erase the on-disk patch — the Analyzer wants to know
+                // what was tried, not what's currently applied.
+                previous_attempts.push(serde_json::json!({
+                    "attempt_number": attempt_number,
+                    "patch_path": applied_patch.clone(),
+                    "verdict": "marginal",
+                }));
+                iteration += 1;
+                continue;
+            }
+            break (attempt_verdict, applied_patch);
+        };
         let next = match overall {
             Verdict::Accept | Verdict::Marginal | Verdict::Neutral => CycleState::Accept,
             Verdict::Regressed => CycleState::Reject,
@@ -570,6 +671,34 @@ impl Orchestrator {
 mod tests {
     use super::*;
     use crate::evaluator::TTestResult;
+
+    #[test]
+    fn should_iterate_loops_on_marginal_under_cap() {
+        assert!(should_iterate(Verdict::Marginal, 1, 3));
+        assert!(should_iterate(Verdict::Marginal, 2, 3));
+    }
+
+    #[test]
+    fn should_iterate_stops_when_cap_reached() {
+        // attempt_number is 1-indexed, so attempt 3 with cap 3 means we
+        // already used all three attempts — no more iterations.
+        assert!(!should_iterate(Verdict::Marginal, 3, 3));
+        assert!(!should_iterate(Verdict::Marginal, 4, 3));
+    }
+
+    #[test]
+    fn should_iterate_skips_non_marginal_verdicts() {
+        assert!(!should_iterate(Verdict::Accept, 1, 5));
+        assert!(!should_iterate(Verdict::Neutral, 1, 5));
+        assert!(!should_iterate(Verdict::Regressed, 1, 5));
+    }
+
+    #[test]
+    fn should_iterate_disabled_when_cap_is_one() {
+        // With max_attempts = 1 the first marginal verdict is already
+        // terminal; no further attempts allowed.
+        assert!(!should_iterate(Verdict::Marginal, 1, 1));
+    }
 
     #[test]
     fn parse_agent_response_unwraps_json_string() {
