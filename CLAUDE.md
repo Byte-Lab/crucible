@@ -23,12 +23,20 @@ cargo run --bin crucible-orchestrator -- --config config/crucible.toml --max-cyc
 CRUCIBLE_E2E=1 cargo test --test e2e -- --nocapture   # hardware-gated end-to-end smoke
 ```
 
-Build the minimal guest rootfs (Debian bookworm via mmdebstrap; rootless):
+Build the minimal guest rootfs (Debian bookworm via mmdebstrap):
 
 ```bash
 scripts/setup-rootfs.sh                              # writes ~/.crucible/rootfs
 scripts/setup-rootfs.sh --target /path --force       # explicit target + rebuild
 ```
+
+The script auto-elevates with sudo because `mmdebstrap --mode=root` is
+required for the guest's files to be owned by uid 0 on disk; vng's 9p
+mount surfaces those uids inside the guest, and init refuses to mount
+`/run` unless it's actually uid 0. On hosts without
+`debian-archive-keyring` (Ubuntu by default) the script switches on
+insecure apt options for the bootstrap. The default target follows
+`SUDO_USER`'s HOME, not root's.
 
 Python tests (no `src/` layout — `PYTHONPATH=.` is required so `agents.*` and `guest.*` resolve):
 
@@ -75,9 +83,11 @@ The full pipeline is wired:
 - `ApplyChanges` calls `KernelBuilder::apply_and_build` (auto-reverts patch on build failure), shuts the VM down, reboots with the new image.
 - `Evaluate` calls `run_evaluation` → per-metric `evaluator::evaluate_metric` → `db.insert_evaluation` → `determine_overall_verdict`. Branches: `Accept | Marginal | Neutral` → `Accept`; `Regressed` → `Reject`.
 
+`VmManager::boot` spawns `vng` with the kernel-source path as cwd (virtme-ng 1.35 has no `--kernel`/`--boot` flags — it picks up `arch/x86/boot/bzImage` from cwd itself). The qemu device for vsock is appended via `--qemu-opts=` (the `=` form is required because argparse rejects bare values starting with `-`). `--exec` runs the guest agent directly instead of letting systemd start the unit, so the synthetic loop doesn't depend on cgroups or service ordering. When `[vm] guest_payload` is set, the host path is overlaid via `--rodir /opt/crucible/guest=…` so editing the agent doesn't require a rootfs rebuild. The child has `kill_on_drop(true)` to prevent leaked QEMUs from holding the vsock CID across panicking tests.
+
 Synthetic-loop path (`[measurement] mode = "synthetic"`, default): the profiler agent calls `run_benchmark('stress-ng', args, duration_secs)` via the guest RPC, parses ops/sec from `--metrics-brief`, and emits `fps_avg = fps_p1 = 0`, `frame_time_p99_ms = 1000 / ops_per_sec`, `psi_*_avg = psi_*_delta`. Game-mode (`mode = "game"`) keeps the MangoHud/perfetto tools and is gated on a Steam/Wine/Mesa rootfs that doesn't exist yet.
 
-What still doesn't work end-to-end without operator setup: `cargo run -- --single-cycle` requires `ANTHROPIC_API_KEY`, real hardware (VFIO device + kernel source + `vng`), and the rootfs at `[vm].guest_rootfs` built by `scripts/setup-rootfs.sh`. The hardware-gated `tests/e2e.rs` covers the synthetic loop when `CRUCIBLE_E2E=1` and prerequisites are set, otherwise it prints `e2e skipped` and passes. `Iterate` exists in the state machine but is never reached. `Reject` does not yet revert the applied patch via `KernelBuilder::revert_patch`.
+End-to-end status (2026-05-15): `cargo test --test e2e` with `CRUCIBLE_E2E=1` runs cleanly through **SelectGame → ProvisionVm → BaselineMeasurement → Analyze**, then trips the Anthropic API 429 rate limit on the **GenerateOptimization** call (org cap = 30k input tokens/min). `ApplyChanges`, `ComparisonMeasurement`, `Evaluate` haven't been exercised live yet. `Iterate` exists in the state machine but is never reached. `Reject` does not yet revert the applied patch via `KernelBuilder::revert_patch`. The hardware-gated test prints `e2e skipped` and passes when `CRUCIBLE_E2E` is unset.
 
 ### Agent dispatch protocol
 
@@ -106,15 +116,15 @@ Metrics scored: `fps_avg`, `fps_p1` (higher is better); `frame_time_p99_ms`, `ps
 
 Single source of truth: `config/crucible.toml`, parsed by `config.rs` into `CrucibleConfig`. All numeric/string fields have `serde(default)` fallbacks defined as `default_*` functions — keep those defaults in sync with `config/crucible.toml` if you add a field.
 
-Hardware-specific values live in `[vm]` (`vfio_device`, `kernel_src`, `guest_rootfs`, `vsock_cid`). Don't hardcode these elsewhere.
+Hardware-specific values live in `[vm]` (`vfio_device`, `kernel_src`, `guest_rootfs`, `vsock_cid`, optional `guest_payload`). Don't hardcode these elsewhere. `vfio_device` accepts the empty string or `"none"` to skip GPU passthrough — required for the synthetic loop on commodity hardware. `guest_payload` is a host path that gets overlaid into the guest at `/opt/crucible/guest`; the e2e test points it at the repo's `guest/` directory so iteration doesn't need a rootfs rebuild.
 
 `[measurement] mode` selects the profiler path. `"synthetic"` (default) drives `stress-ng` via the guest RPC and is the only path the bookworm rootfs from `scripts/setup-rootfs.sh` supports today. `"game"` keeps the legacy MangoHud/perfetto tooling for when a Steam/Wine rootfs exists. `benchmark_args` and `benchmark_duration_secs` configure the synthetic workload.
 
 ## Conventions specific to this repo
 
-- **Wire types are duplicated across Rust and Python.** Treat `crucible-common::protocol`, `agents/common/protocol.py`, and `guest/protocol.py` as one logical schema in three files. Tests in `tests/python/test_protocol.py` and `crates/crucible-common/src/protocol.rs` exist to catch drift.
+- **Wire types are duplicated across Rust and Python.** Treat `crucible-common::protocol`, `agents/common/protocol.py`, and `guest/protocol.py` as one logical schema in three files. Tests in `tests/python/test_protocol.py` and `crates/crucible-common/src/protocol.rs` exist to catch drift. `guest/protocol.py` is intentionally stdlib-only (`@dataclass` + `to_dict`/`from_dict`/`to_json`/`from_json`) — Debian bookworm ships pydantic v1 and the agent has to import there too. The Anthropic-side host agents still use pydantic v2 freely; just don't introduce pydantic types in the guest module.
 - **Agents do not import `crucible-orchestrator` or talk to SQLite.** All persistence goes through the orchestrator. If an agent needs prior cycle data, the orchestrator passes it in via `TaskEnvelope.context`.
 - The `agents.*` and `guest.*` packages have no `setup.py`/`pyproject` install — they are imported by path. Always set `PYTHONPATH=.` (the workspace root) when running Python directly. The orchestrator does this automatically when spawning agents.
 - Guest-agent RPC is **length-prefixed JSON over vsock** (4-byte big-endian length, then payload), not newline-delimited. See `guest/crucible_guest_agent.py:_recv_message`. The host-side counterpart is `agents/common/guest_rpc.py::GuestRpc` (connect-per-call AF_VSOCK).
 - Claude-backed agents (anything subclassing `ClaudeAgentBase`) return `{"response": "<final assistant text>"}` in their `ResultEnvelope.result`. The orchestrator uses `parse_agent_response()` to unwrap that envelope, optionally strip ` ```json ` fences, and parse the inner JSON. Use it whenever consuming a Claude agent's structured output.
-- The minimal guest rootfs is built by `scripts/setup-rootfs.sh` using `mmdebstrap` (rootless) into `~/.crucible/rootfs`. It installs `systemd`, `python3`, `python3-pydantic`, `stress-ng`, `linux-perf`, `dbus`, `kmod`, and enables `crucible-guest-agent.service` plus a oneshot `crucible-cgroups.service`. No Steam/Wine/Mesa — those land in a later milestone. The script fails fast if `mmdebstrap` is missing (no silent `debootstrap` fallback). Idempotent via the `.crucible-built` stamp file in the target.
+- The minimal guest rootfs is built by `scripts/setup-rootfs.sh` using `mmdebstrap --mode=root` (auto-elevates with sudo) into `~/.crucible/rootfs`. It installs `systemd-sysv`, `udev` (required for `/dev/virtio-ports/*` symlinks that virtme-init looks for), `python3`, `stress-ng`, `linux-perf`, `dbus`, `kmod`, and enables `crucible-guest-agent.service` plus a oneshot `crucible-cgroups.service`. No `python3-pydantic` — the guest agent uses stdlib only. No Steam/Wine/Mesa — those land in a later milestone. The script fails fast if `mmdebstrap` is missing (no silent `debootstrap` fallback). On hosts without `debian-archive-keyring` (Ubuntu) the bootstrap runs with apt's insecure-repo options. Idempotent via the `.crucible-built` stamp file in the target.
