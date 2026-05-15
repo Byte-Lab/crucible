@@ -13,8 +13,30 @@ Respond with JSON: {"fps_avg": <float>, "fps_p1": <float>, "frame_time_p99_ms": 
     def build_user_message(self, task: TaskEnvelope) -> str:
         context = task.context
         phase = context.get("phase", "baseline")
-        game = context.get("game_name", "unknown")
+        game = context.get("game", context.get("game_name", "unknown"))
         hypothesis = context.get("optimization_hypothesis", "")
+        workload_kind = context.get("workload_kind", "game")
+
+        if workload_kind == "synthetic":
+            args = context.get("benchmark_args", ["--cpu", "2"])
+            duration = context.get("duration_secs", 30)
+            msg = (
+                f"Collect {phase} measurements via the synthetic CPU workload.\n"
+                f"Call run_benchmark(name='stress-ng', args={args!r}, "
+                f"duration_secs={duration}) exactly once. After it returns:\n"
+                "  fps_avg = 0.0\n"
+                "  fps_p1 = 0.0\n"
+                "  frame_time_p99_ms = 1000.0 / ops_per_sec when ops_per_sec > 0, "
+                "else 0.0\n"
+                "  psi_cpu_avg = psi_cpu_delta from the tool result\n"
+                "  psi_memory_avg = psi_memory_delta from the tool result\n"
+                "Emit only the final JSON object described in the system prompt; "
+                "set collection_paths to {} for synthetic runs."
+            )
+            if hypothesis:
+                msg = f"Hypothesis: {hypothesis}\n" + msg
+            return msg
+
         msg = f"Collect {phase} measurements for {game}.\n"
         if hypothesis:
             msg += f"Hypothesis: {hypothesis}\nConfigure profiling relevant to this.\n"

@@ -141,3 +141,27 @@ def make_profiler_tools(registry: ToolRegistry, guest_rpc: Any) -> None:
                 pass
         # Fall back to local PSI snapshot
         return collect_psi_snapshot()
+
+    @registry.tool(description=(
+        "Run a synthetic benchmark in the guest VM. `name` selects the engine "
+        "(only 'stress-ng' is supported today). `args` are passed through to "
+        "stress-ng, e.g. ['--cpu', '4']. `duration_secs` caps the run. "
+        "Returns ops_per_sec, bogo_ops, real_time_secs, and psi_*_delta."
+    ))
+    def run_benchmark(name: str, args: list[str], duration_secs: int) -> dict:
+        if guest_rpc is None:
+            return {
+                "status": "dry_run",
+                "message": (
+                    f"Would run {name} for {duration_secs}s with args {args} "
+                    "(no guest RPC)"
+                ),
+            }
+        try:
+            return guest_rpc.call("run_benchmark", {
+                "name": name,
+                "args": args,
+                "duration_secs": duration_secs,
+            })
+        except Exception as exc:
+            return {"status": "error", "error": str(exc)}
