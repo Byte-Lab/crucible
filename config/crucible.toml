@@ -14,6 +14,11 @@ boot_timeout_secs = 60
 vsock_cid = 3
 
 [measurement]
+# "synthetic" drives stress-ng in the guest (no Steam/Wine needed).
+# "game" runs the real Steam path via the profiler agent's classic tools.
+mode = "synthetic"
+benchmark_args = ["--cpu", "2"]
+benchmark_duration_secs = 30
 runs_per_phase = 5
 warmup_runs = 1
 significance_threshold = 0.05

@@ -49,6 +49,16 @@ pub struct MeasurementConfig {
     pub effect_size_threshold: f64,
     #[serde(default = "default_max_stddev")]
     pub max_stddev_pct: f64,
+    /// Workload kind threaded into the profiler agent context. `"synthetic"`
+    /// drives stress-ng inside the guest; `"game"` runs the real Steam path.
+    #[serde(default = "default_mode")]
+    pub mode: String,
+    /// Args forwarded to stress-ng when `mode = "synthetic"`. Ignored otherwise.
+    #[serde(default = "default_benchmark_args")]
+    pub benchmark_args: Vec<String>,
+    /// Per-run duration for the synthetic benchmark, in seconds.
+    #[serde(default = "default_benchmark_duration")]
+    pub benchmark_duration_secs: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -118,6 +128,15 @@ fn default_effect_size() -> f64 {
 fn default_max_stddev() -> f64 {
     10.0
 }
+fn default_mode() -> String {
+    "synthetic".to_string()
+}
+fn default_benchmark_args() -> Vec<String> {
+    vec!["--cpu".to_string(), "2".to_string()]
+}
+fn default_benchmark_duration() -> u32 {
+    30
+}
 fn default_model() -> String {
     "claude-sonnet-4-20250514".to_string()
 }
@@ -146,6 +165,9 @@ impl Default for MeasurementConfig {
             significance_threshold: default_significance(),
             effect_size_threshold: default_effect_size(),
             max_stddev_pct: default_max_stddev(),
+            mode: default_mode(),
+            benchmark_args: default_benchmark_args(),
+            benchmark_duration_secs: default_benchmark_duration(),
         }
     }
 }
@@ -203,7 +225,32 @@ mod tests {
         assert_eq!(config.vm.kernel_src, "/home/void/upstream/linux");
         assert_eq!(config.vm.memory, "16G"); // default
         assert_eq!(config.measurement.runs_per_phase, 5); // default
+        assert_eq!(config.measurement.mode, "synthetic"); // default
+        assert_eq!(config.measurement.benchmark_args, vec!["--cpu", "2"]); // default
+        assert_eq!(config.measurement.benchmark_duration_secs, 30); // default
         assert_eq!(config.agents.model, "claude-sonnet-4-20250514"); // default
+    }
+
+    #[test]
+    fn measurement_mode_can_be_overridden() {
+        let toml_str = r#"
+            [orchestrator]
+            db_path = "/tmp/x.db"
+            artifact_dir = "/tmp/x"
+            [vm]
+            kernel_src = "/tmp/k"
+            guest_rootfs = "/tmp/r"
+            vfio_device = "00:00.0"
+            [measurement]
+            mode = "game"
+            benchmark_args = ["--vm", "1"]
+            benchmark_duration_secs = 90
+            [agents]
+        "#;
+        let config: CrucibleConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.measurement.mode, "game");
+        assert_eq!(config.measurement.benchmark_args, vec!["--vm", "1"]);
+        assert_eq!(config.measurement.benchmark_duration_secs, 90);
     }
 
     #[test]

@@ -333,6 +333,10 @@ impl Orchestrator {
             "phase": "baseline",
             "game": game_name,
             "runs": self.config.measurement.runs_per_phase,
+            "workload_kind": self.config.measurement.mode,
+            "benchmark_args": self.config.measurement.benchmark_args,
+            "duration_secs": self.config.measurement.benchmark_duration_secs,
+            "vsock_cid": self.config.vm.vsock_cid,
         });
         let baseline_result = self
             .run_agent(AgentName::Profiler, baseline_context)
@@ -403,6 +407,10 @@ impl Orchestrator {
             "phase": "comparison",
             "game": game_name,
             "runs": self.config.measurement.runs_per_phase,
+            "workload_kind": self.config.measurement.mode,
+            "benchmark_args": self.config.measurement.benchmark_args,
+            "duration_secs": self.config.measurement.benchmark_duration_secs,
+            "vsock_cid": self.config.vm.vsock_cid,
         });
         let comparison_result = self
             .run_agent(AgentName::Profiler, comparison_context)
