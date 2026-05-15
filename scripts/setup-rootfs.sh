@@ -31,7 +31,17 @@ EOF
 }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TARGET="${CRUCIBLE_ROOTFS:-$HOME/.crucible/rootfs}"
+
+# Default target picks the invoking user's HOME, even when re-invoked
+# under sudo (where $HOME resets to /root and the rootfs would land in
+# a path the regular user can't traverse).
+if [[ -n "${CRUCIBLE_ROOTFS:-}" ]]; then
+    TARGET="$CRUCIBLE_ROOTFS"
+elif [[ -n "${SUDO_USER:-}" && "$SUDO_USER" != "root" ]]; then
+    TARGET="$(getent passwd "$SUDO_USER" | cut -d: -f6)/.crucible/rootfs"
+else
+    TARGET="$HOME/.crucible/rootfs"
+fi
 SUITE="bookworm"
 FORCE=0
 
