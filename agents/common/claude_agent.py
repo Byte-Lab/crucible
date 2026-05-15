@@ -4,6 +4,7 @@ from typing import Any
 import anthropic
 
 from agents.common.agent_base import AgentBase
+from agents.common.guest_rpc import GuestRpc
 from agents.common.protocol import ApiUsage, TaskEnvelope
 from agents.common.tool_registry import ToolRegistry
 
@@ -26,6 +27,11 @@ class ClaudeAgentBase(AgentBase):
     def execute(self, task: TaskEnvelope) -> tuple[dict[str, Any], ApiUsage]:
         client = anthropic.Anthropic()
         registry = ToolRegistry()
+        # Expose a guest-RPC client to tools when the orchestrator threaded
+        # a vsock CID through context. Tests construct TaskEnvelope without
+        # this key, in which case tools fall back to dry-run behavior.
+        cid = task.context.get("vsock_cid")
+        self._guest_rpc = GuestRpc(int(cid)) if isinstance(cid, int) else None
         self.setup_tools(registry)
 
         messages: list[dict[str, Any]] = [
