@@ -5,25 +5,16 @@
 # synthetic stress-ng benchmark. Steam, Wine, Mesa, and MangoHud are
 # intentionally absent — those land in a separate, later milestone.
 #
-# Rootless by default via `mmdebstrap`. If `mmdebstrap` isn't installed
-# we fail fast with an install hint rather than silently switching to
-# `debootstrap` (which needs root).
-#
-# All overlay work (guest agent install, systemd unit enable, modules-load
-# files, stamp file) runs inside mmdebstrap's user namespace via
-# `--customize-hook`. Doing it after mmdebstrap exits would fail because
-# the rootfs would be owned by a subuid the host user can't write.
+# Runs mmdebstrap as actual root so the resulting files are owned by
+# uid 0 on disk. vng's 9p root mount reports those uids straight
+# through to the guest; without uid 0 the guest's init can't mount
+# /run and panics. The earlier unshare-mode rootfs (files owned by a
+# subuid) tripped exactly that panic in our e2e attempts.
 #
 # Usage:
 #   scripts/setup-rootfs.sh [--target <dir>] [--suite <debian-suite>] [--force]
 #
-# Environment:
-#   CRUCIBLE_ROOTFS         Default target dir if --target not given.
-#                           (default: ~/.crucible/rootfs)
-#   CRUCIBLE_ROOTFS_INSECURE  Set to 1 to skip apt signature verification.
-#                           Needed when the host lacks debian-archive-keyring
-#                           (e.g. Ubuntu hosts without debian-archive-keyring
-#                           installed).
+# The script auto-elevates via sudo if not already root.
 
 set -euo pipefail
 
@@ -61,6 +52,18 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# Re-exec under sudo if not already root. mmdebstrap --mode=root needs
+# real uid 0 to chroot and to set file ownership in the rootfs.
+if [[ $EUID -ne 0 ]]; then
+    echo "[setup-rootfs] needs root; re-exec under sudo"
+    exec sudo --preserve-env=CRUCIBLE_ROOTFS,CRUCIBLE_ROOTFS_INSECURE \
+        TARGET="$TARGET" SUITE="$SUITE" FORCE="$FORCE" \
+        bash "$0" \
+        --target "$TARGET" \
+        --suite "$SUITE" \
+        $([[ $FORCE -eq 1 ]] && echo --force)
+fi
+
 STAMP="$TARGET/.crucible-built"
 
 if [[ -f "$STAMP" && $FORCE -eq 0 ]]; then
@@ -78,18 +81,6 @@ EOF
     exit 1
 fi
 
-# Packages the guest needs:
-#   systemd-sysv  systemd + init scripts
-#   python3       runs the guest agent module
-#   python3-pydantic guest agent dependency
-#   stress-ng     synthetic workload driver
-#   linux-perf    "perf" binary (optional, useful for future bench types)
-#   dbus          systemd dependency surface
-#   kmod          modprobe for vsock module load on boot
-#   util-linux    coreutils-ish baseline
-#   ca-certificates  TLS roots for any future apt/curl calls
-#   procps        ps/kill basics
-#   iproute2      `ip` for ad-hoc debugging
 PACKAGES=(
     systemd-sysv
     python3
@@ -109,47 +100,50 @@ echo "[setup-rootfs] target  : $TARGET"
 echo "[setup-rootfs] suite   : $SUITE"
 echo "[setup-rootfs] packages: ${PACKAGES[*]}"
 
-# A previous failed run can leave a directory owned by mmdebstrap's
-# subuid that the host user can't delete. Bail with a clear hint rather
-# than confusing the user with permission errors deep inside mmdebstrap.
-if [[ -e "$TARGET" ]]; then
-    if ! rm -rf "$TARGET" 2>/dev/null; then
-        echo "[setup-rootfs] $TARGET exists but cannot be removed by \$USER." >&2
-        echo "[setup-rootfs] Likely owned by a subuid from a prior mmdebstrap run." >&2
-        echo "[setup-rootfs] Pick a fresh path with --target, or sudo rm -rf $TARGET." >&2
-        exit 1
-    fi
+# Wipe any prior rootfs (we're root, so subuid-owned remnants from an
+# earlier mode=unshare run are fair game too).
+rm -rf "$TARGET"
+mkdir -p "$TARGET"
+
+# Insecure apt opts when the host lacks debian-archive-keyring (common
+# on non-Debian hosts). This rootfs is for ephemeral dev VMs.
+APT_OPTS=()
+if [[ "${CRUCIBLE_ROOTFS_INSECURE:-0}" == "1" ]] \
+    || ! ls /usr/share/keyrings/debian-archive*.gpg >/dev/null 2>&1; then
+    echo "[setup-rootfs] debian-archive-keyring not found; skipping signature verification"
+    APT_OPTS+=(
+        --aptopt='APT::Get::AllowUnauthenticated "true"'
+        --aptopt='Acquire::AllowInsecureRepositories "true"'
+        --aptopt='Acquire::AllowDowngradeToInsecureRepositories "true"'
+    )
 fi
 
-# Stage the overlay payload into a world-traversable location. mmdebstrap's
-# customize hook runs in a user namespace mapped to a subuid that can't
-# traverse $HOME (mode 0750). /tmp is mode 1777 + world-readable.
-STAGE="$(mktemp -d /tmp/cruc-overlay.XXXXXX)"
-trap 'rm -rf "$STAGE"' EXIT
-cp -a "$REPO_ROOT/guest" "$STAGE/guest"
-chmod -R a+rX "$STAGE"
-HOOK="$STAGE/hook.sh"
-cat >"$HOOK" <<'HOOK_EOF'
-set -euo pipefail
-ROOTFS="$1"
-STAGE="$2"
+mmdebstrap \
+    --mode=root \
+    --variant=minbase \
+    --include="$PKG_LIST" \
+    "${APT_OPTS[@]}" \
+    "$SUITE" \
+    "$TARGET"
 
-install -d "$ROOTFS/opt/crucible/guest"
-cp -a "$STAGE/guest/." "$ROOTFS/opt/crucible/guest/"
-chmod +x "$ROOTFS/opt/crucible/guest/setup_cgroups.sh"
+# Overlay the Crucible guest payload. We're running as real root inside
+# this script, so direct writes work without any namespace dance.
+install -d "$TARGET/opt/crucible/guest"
+cp -a "$REPO_ROOT/guest/." "$TARGET/opt/crucible/guest/"
+chmod +x "$TARGET/opt/crucible/guest/setup_cgroups.sh"
 
 install -m 0644 \
-    "$STAGE/guest/crucible-guest-agent.service" \
-    "$ROOTFS/etc/systemd/system/crucible-guest-agent.service"
-install -d "$ROOTFS/etc/systemd/system/multi-user.target.wants"
+    "$REPO_ROOT/guest/crucible-guest-agent.service" \
+    "$TARGET/etc/systemd/system/crucible-guest-agent.service"
+install -d "$TARGET/etc/systemd/system/multi-user.target.wants"
 ln -sf /etc/systemd/system/crucible-guest-agent.service \
-    "$ROOTFS/etc/systemd/system/multi-user.target.wants/crucible-guest-agent.service"
+    "$TARGET/etc/systemd/system/multi-user.target.wants/crucible-guest-agent.service"
 
-install -d "$ROOTFS/etc/modules-load.d"
+install -d "$TARGET/etc/modules-load.d"
 printf 'vsock\nvmw_vsock_virtio_transport\n' \
-    >"$ROOTFS/etc/modules-load.d/vsock.conf"
+    >"$TARGET/etc/modules-load.d/vsock.conf"
 
-cat >"$ROOTFS/etc/systemd/system/crucible-cgroups.service" <<'UNIT'
+cat >"$TARGET/etc/systemd/system/crucible-cgroups.service" <<'UNIT'
 [Unit]
 Description=Crucible cgroup hierarchy setup
 Before=crucible-guest-agent.service
@@ -165,32 +159,7 @@ RemainAfterExit=yes
 WantedBy=multi-user.target
 UNIT
 ln -sf /etc/systemd/system/crucible-cgroups.service \
-    "$ROOTFS/etc/systemd/system/multi-user.target.wants/crucible-cgroups.service"
+    "$TARGET/etc/systemd/system/multi-user.target.wants/crucible-cgroups.service"
 
-date -u +"%Y-%m-%dT%H:%M:%SZ" >"$ROOTFS/.crucible-built"
-HOOK_EOF
-chmod 0755 "$HOOK"
-
-# Insecure apt opts when the host doesn't have debian-archive-keyring
-# installed (common on non-Debian hosts). The rootfs is for ephemeral
-# local dev VMs, not production.
-APT_OPTS=()
-if [[ "${CRUCIBLE_ROOTFS_INSECURE:-0}" == "1" ]] \
-    || ! ls /usr/share/keyrings/debian-archive*.gpg >/dev/null 2>&1; then
-    echo "[setup-rootfs] debian-archive-keyring not found; skipping signature verification"
-    APT_OPTS+=(
-        --aptopt='APT::Get::AllowUnauthenticated "true"'
-        --aptopt='Acquire::AllowInsecureRepositories "true"'
-        --aptopt='Acquire::AllowDowngradeToInsecureRepositories "true"'
-    )
-fi
-
-mmdebstrap \
-    --variant=minbase \
-    --include="$PKG_LIST" \
-    "${APT_OPTS[@]}" \
-    --customize-hook="bash $HOOK \"\$1\" $STAGE" \
-    "$SUITE" \
-    "$TARGET"
-
+date -u +"%Y-%m-%dT%H:%M:%SZ" >"$STAMP"
 echo "[setup-rootfs] done. rootfs at $TARGET"

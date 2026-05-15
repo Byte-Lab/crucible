@@ -31,33 +31,48 @@ impl VmManager {
         self.state
     }
 
-    pub fn build_boot_command(&self, kernel_path: &str) -> Vec<String> {
-        // Skip vfio-pci entirely when no device is configured. Required so
-        // the synthetic loop runs on commodity hardware without GPU
-        // passthrough; the real game-mode milestone still sets a device.
+    pub fn build_boot_command(&self, _kernel_path: &str) -> Vec<String> {
+        // virtme-ng 1.35 picks up `arch/x86/boot/bzImage` from the cwd —
+        // there is no `--kernel` flag and no `--boot` subcommand. The
+        // caller must spawn this with current_dir set to the kernel src.
+        //
+        // --qemu-opts must use the `=` form because argparse otherwise
+        // mis-reads any value starting with `-` as a new option.
+        //
+        // --exec replaces virtme-init's interactive shell with the guest
+        // agent so the VM exits as soon as the agent does (and lives as
+        // long as we keep it alive). The synthetic loop doesn't need
+        // systemd to start; the agent itself is the only service.
         let vfio_dev = self.config.vfio_device.trim();
-        let vfio_opt = if vfio_dev.is_empty() || vfio_dev.eq_ignore_ascii_case("none") {
-            String::new()
-        } else {
-            format!("-device vfio-pci,host={} ", vfio_dev)
-        };
-        let qemu_opts = format!(
-            "{}-m {} -smp {} -device vhost-vsock-pci,guest-cid={}",
-            vfio_opt,
-            self.config.memory,
-            self.config.cpus,
-            self.config.vsock_cid,
-        );
+        let mut qemu_opts = String::new();
+        if !vfio_dev.is_empty() && !vfio_dev.eq_ignore_ascii_case("none") {
+            qemu_opts.push_str(&format!("-device vfio-pci,host={} ", vfio_dev));
+        }
+        qemu_opts.push_str(&format!(
+            "-device vhost-vsock-pci,guest-cid={}",
+            self.config.vsock_cid
+        ));
+        let guest_cmd =
+            "cd /opt/crucible && PYTHONPATH=/opt/crucible \
+             exec python3 -m guest.crucible_guest_agent"
+                .to_string();
         vec![
             "vng".to_string(),
-            "--boot".to_string(),
-            "--kernel".to_string(),
-            kernel_path.to_string(),
+            "--memory".to_string(),
+            self.config.memory.clone(),
+            "--cpus".to_string(),
+            self.config.cpus.to_string(),
             "--root".to_string(),
             self.config.guest_rootfs.clone(),
-            "--qemu-opts".to_string(),
-            qemu_opts,
+            "--exec".to_string(),
+            guest_cmd,
+            format!("--qemu-opts={}", qemu_opts),
         ]
+    }
+
+    /// Kernel-source path the vng invocation must be run from.
+    pub fn kernel_src(&self) -> &str {
+        &self.config.kernel_src
     }
 
     pub async fn boot(&mut self, kernel_path: &str) -> Result<()> {
@@ -71,6 +86,7 @@ impl VmManager {
 
         let child = Command::new(&cmd_args[0])
             .args(&cmd_args[1..])
+            .current_dir(&self.config.kernel_src)
             .stdin(std::process::Stdio::null())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped())
@@ -151,22 +167,38 @@ mod tests {
     fn build_vng_boot_command() {
         let config = test_vm_config();
         let manager = VmManager::new(config);
-        let cmd = manager.build_boot_command("/path/to/bzImage");
-        assert!(cmd.contains(&"--boot".to_string()));
-        assert!(cmd.contains(&"--kernel".to_string()));
-        assert!(cmd.contains(&"/path/to/bzImage".to_string()));
+        let cmd = manager.build_boot_command("/ignored");
+        // No more `--boot` or `--kernel` — vng 1.35 picks up bzImage from cwd.
+        assert!(!cmd.iter().any(|a| a == "--boot"));
+        assert!(!cmd.iter().any(|a| a == "--kernel"));
+        assert!(cmd.iter().any(|a| a == "--root"));
+        assert!(cmd.iter().any(|a| a == "--memory"));
+        assert!(cmd.iter().any(|a| a == "--cpus"));
+        assert!(cmd.iter().any(|a| a == "--exec"));
     }
 
     #[test]
     fn build_vng_boot_command_contains_qemu_opts() {
         let config = test_vm_config();
         let manager = VmManager::new(config);
-        let cmd = manager.build_boot_command("/path/to/bzImage");
+        let cmd = manager.build_boot_command("/ignored");
         let joined = cmd.join(" ");
-        assert!(joined.contains("vfio-pci,host=03:00.0"));
-        assert!(joined.contains("-m 16G"));
-        assert!(joined.contains("-smp 8"));
+        assert!(joined.contains("vfio-pci,host=03:00.0"), "joined: {}", joined);
         assert!(joined.contains("vhost-vsock-pci,guest-cid=3"));
+        // --qemu-opts must use the `=` form so argparse accepts a value
+        // that begins with `-`.
+        assert!(joined.contains("--qemu-opts=-device "));
+    }
+
+    #[test]
+    fn build_vng_boot_command_exec_runs_guest_agent() {
+        let config = test_vm_config();
+        let manager = VmManager::new(config);
+        let cmd = manager.build_boot_command("/ignored");
+        let exec_pos = cmd.iter().position(|a| a == "--exec").unwrap();
+        let exec_arg = &cmd[exec_pos + 1];
+        assert!(exec_arg.contains("guest.crucible_guest_agent"));
+        assert!(exec_arg.contains("/opt/crucible"));
     }
 
     #[test]
