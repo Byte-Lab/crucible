@@ -4,10 +4,91 @@ use uuid::Uuid;
 
 use crate::agent_runner::AgentRunner;
 use crate::config::CrucibleConfig;
-use crate::db::Database;
-use crate::evaluator::{EvalConfig, MetricEvaluation, Verdict};
+use crate::db::{Database, Measurement};
+use crate::evaluator::{evaluate_metric, EvalConfig, MetricEvaluation, Verdict};
 use crate::kernel_builder::KernelBuilder;
 use crate::state_machine::{CycleState, StateMachine};
+
+/// Metrics persisted per measurement, paired with whether lower values are better.
+const METRIC_DEFS: &[(&str, bool)] = &[
+    ("fps_avg", false),
+    ("fps_p1", false),
+    ("frame_time_p99_ms", true),
+    ("psi_cpu_avg", true),
+    ("psi_memory_avg", true),
+];
+
+/// Score a metric: delegate to t-test based scorer when both sides have
+/// enough samples, otherwise produce a delta-only Neutral verdict.
+fn sample_variance(data: &[f64]) -> f64 {
+    if data.len() < 2 {
+        return 0.0;
+    }
+    let n = data.len() as f64;
+    let m = data.iter().sum::<f64>() / n;
+    data.iter().map(|x| (x - m).powi(2)).sum::<f64>() / (n - 1.0)
+}
+
+fn score_metric(
+    metric: &str,
+    baseline: &[f64],
+    comparison: &[f64],
+    lower_is_better: bool,
+    config: &EvalConfig,
+) -> MetricEvaluation {
+    let var_b = sample_variance(baseline);
+    let var_c = sample_variance(comparison);
+    let usable = baseline.len() >= 2
+        && comparison.len() >= 2
+        && var_b > f64::EPSILON
+        && var_c > f64::EPSILON;
+    if usable {
+        return evaluate_metric(metric, baseline, comparison, lower_is_better, config);
+    }
+    let baseline_mean = if baseline.is_empty() {
+        0.0
+    } else {
+        baseline.iter().sum::<f64>() / baseline.len() as f64
+    };
+    let comparison_mean = if comparison.is_empty() {
+        0.0
+    } else {
+        comparison.iter().sum::<f64>() / comparison.len() as f64
+    };
+    let delta_pct = if baseline_mean.abs() > f64::EPSILON {
+        (comparison_mean - baseline_mean) / baseline_mean * 100.0
+    } else {
+        0.0
+    };
+    MetricEvaluation {
+        metric: metric.to_string(),
+        baseline_mean,
+        comparison_mean,
+        delta_pct,
+        t_test: crate::evaluator::TTestResult {
+            t_statistic: 0.0,
+            degrees_of_freedom: 0.0,
+            p_value: 1.0,
+            significant: false,
+        },
+        cohens_d: 0.0,
+        verdict: Verdict::Neutral,
+    }
+}
+
+fn metric_samples(measurements: &[Measurement], metric: &str) -> Vec<f64> {
+    measurements
+        .iter()
+        .map(|m| match metric {
+            "fps_avg" => m.fps_avg,
+            "fps_p1" => m.fps_p1,
+            "frame_time_p99_ms" => m.frame_time_p99_ms,
+            "psi_cpu_avg" => m.psi_cpu_avg,
+            "psi_memory_avg" => m.psi_memory_avg,
+            _ => 0.0,
+        })
+        .collect()
+}
 
 pub fn build_task_envelope(
     agent: AgentName,
@@ -26,6 +107,32 @@ pub fn build_task_envelope(
             timeout_seconds,
         },
     }
+}
+
+/// Unwrap a Claude-backed agent's `{"response": "<json>"}` envelope.
+/// Falls back to the raw value if `response` is absent or the inner string
+/// is not parseable JSON. Strips ``` fences if present.
+pub fn parse_agent_response(value: &serde_json::Value) -> serde_json::Value {
+    let Some(text) = value.get("response").and_then(|v| v.as_str()) else {
+        return value.clone();
+    };
+    let trimmed = text.trim();
+    let stripped = if let Some(rest) = trimmed.strip_prefix("```json") {
+        rest.trim_end_matches("```").trim()
+    } else if let Some(rest) = trimmed.strip_prefix("```") {
+        rest.trim_end_matches("```").trim()
+    } else {
+        trimmed
+    };
+    serde_json::from_str(stripped).unwrap_or_else(|_| value.clone())
+}
+
+/// Extract a `f64` from a JSON object, returning 0.0 when missing or non-numeric.
+fn json_f64(value: &serde_json::Value, key: &str) -> f64 {
+    value
+        .get(key)
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0)
 }
 
 /// Determine overall verdict from metric evaluations.
@@ -108,6 +215,76 @@ impl Orchestrator {
         }
     }
 
+    /// Read both phases from the DB, run a t-test per metric, persist the
+    /// per-metric `evaluations` rows, and return the overall verdict.
+    /// Metrics with fewer than two samples per side fall back to a delta-only
+    /// `Neutral` verdict so the cycle still completes on synthetic single-run data.
+    pub fn run_evaluation(&self, cycle_id: i64) -> Result<Verdict> {
+        let baseline = self.db.get_measurements(cycle_id, "baseline")?;
+        let comparison = self.db.get_measurements(cycle_id, "comparison")?;
+        let cfg = self.eval_config();
+        let mut evals: Vec<MetricEvaluation> = Vec::with_capacity(METRIC_DEFS.len());
+        for (metric, lower_is_better) in METRIC_DEFS {
+            let b = metric_samples(&baseline, metric);
+            let c = metric_samples(&comparison, metric);
+            let scored = score_metric(metric, &b, &c, *lower_is_better, &cfg);
+            self.db.insert_evaluation(
+                cycle_id,
+                &scored.metric,
+                scored.baseline_mean,
+                scored.comparison_mean,
+                scored.delta_pct,
+                &scored.verdict.to_string(),
+            )?;
+            tracing::info!(
+                cycle_id,
+                metric = %scored.metric,
+                baseline = scored.baseline_mean,
+                comparison = scored.comparison_mean,
+                delta_pct = scored.delta_pct,
+                verdict = %scored.verdict,
+                "metric scored"
+            );
+            evals.push(scored);
+        }
+        let overall = determine_overall_verdict(&evals);
+        tracing::info!(cycle_id, verdict = %overall, "overall verdict");
+        Ok(overall)
+    }
+
+    fn persist_measurement(
+        &self,
+        cycle_id: i64,
+        phase: &str,
+        agent_result: &serde_json::Value,
+    ) -> Result<()> {
+        let parsed = parse_agent_response(agent_result);
+        let fps_avg = json_f64(&parsed, "fps_avg");
+        let fps_p1 = json_f64(&parsed, "fps_p1");
+        let frame_time_p99_ms = json_f64(&parsed, "frame_time_p99_ms");
+        let psi_cpu_avg = json_f64(&parsed, "psi_cpu_avg");
+        let psi_memory_avg = json_f64(&parsed, "psi_memory_avg");
+
+        let id = self.db.insert_measurement(
+            cycle_id,
+            phase,
+            fps_avg,
+            fps_p1,
+            frame_time_p99_ms,
+            psi_cpu_avg,
+            psi_memory_avg,
+        )?;
+        tracing::info!(
+            cycle_id,
+            phase,
+            measurement_id = id,
+            fps_avg,
+            psi_cpu_avg,
+            "measurement persisted"
+        );
+        Ok(())
+    }
+
     pub async fn run_cycle(&mut self) -> Result<()> {
         // SelectGame
         self.state_machine
@@ -119,12 +296,7 @@ impl Orchestrator {
             "action": "select_game",
         });
         let game_result = self.run_agent(AgentName::GameSelector, game_context).await?;
-
-        // The agent returns {"response": "<json string>"} -- try to parse the inner JSON
-        let game_info = game_result["response"]
-            .as_str()
-            .and_then(|s| serde_json::from_str::<serde_json::Value>(s).ok())
-            .unwrap_or(game_result.clone());
+        let game_info = parse_agent_response(&game_result);
 
         let game_name = game_info["name"]
             .as_str()
@@ -160,9 +332,10 @@ impl Orchestrator {
             "game": game_name,
             "runs": self.config.measurement.runs_per_phase,
         });
-        let _baseline_result = self
+        let baseline_result = self
             .run_agent(AgentName::Profiler, baseline_context)
             .await?;
+        self.persist_measurement(cycle_id, "baseline", &baseline_result)?;
 
         // Analyze
         self.state_machine
@@ -226,9 +399,10 @@ impl Orchestrator {
             "game": game_name,
             "runs": self.config.measurement.runs_per_phase,
         });
-        let _comparison_result = self
+        let comparison_result = self
             .run_agent(AgentName::Profiler, comparison_context)
             .await?;
+        self.persist_measurement(cycle_id, "comparison", &comparison_result)?;
 
         // Evaluate
         self.state_machine
@@ -238,13 +412,16 @@ impl Orchestrator {
             .update_cycle_status(cycle_id, CycleState::Evaluate.as_str())?;
         tracing::info!(state = %self.state_machine.state(), "evaluating results");
 
-        // Accept/Reject (placeholder: accept for now)
+        let overall = self.run_evaluation(cycle_id)?;
+        let next = match overall {
+            Verdict::Accept | Verdict::Marginal | Verdict::Neutral => CycleState::Accept,
+            Verdict::Regressed => CycleState::Reject,
+        };
         self.state_machine
-            .transition(CycleState::Accept)
+            .transition(next)
             .map_err(|e| anyhow::anyhow!(e))?;
-        self.db
-            .update_cycle_status(cycle_id, CycleState::Accept.as_str())?;
-        tracing::info!(state = %self.state_machine.state(), cycle_id, "cycle completed");
+        self.db.update_cycle_status(cycle_id, next.as_str())?;
+        tracing::info!(state = %self.state_machine.state(), cycle_id, %overall, "cycle decision");
 
         // Back to Idle
         self.state_machine
@@ -302,6 +479,236 @@ impl Orchestrator {
 mod tests {
     use super::*;
     use crate::evaluator::TTestResult;
+
+    #[test]
+    fn parse_agent_response_unwraps_json_string() {
+        let raw = serde_json::json!({
+            "response": "{\"name\": \"cyberpunk\", \"app_id\": 1091500}"
+        });
+        let parsed = parse_agent_response(&raw);
+        assert_eq!(parsed["name"], "cyberpunk");
+        assert_eq!(parsed["app_id"], 1091500);
+    }
+
+    #[test]
+    fn parse_agent_response_strips_markdown_fence() {
+        let raw = serde_json::json!({
+            "response": "```json\n{\"fps_avg\": 60.5}\n```"
+        });
+        let parsed = parse_agent_response(&raw);
+        assert!((parsed["fps_avg"].as_f64().unwrap() - 60.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_agent_response_returns_input_when_no_response_key() {
+        let raw = serde_json::json!({"echo": {"hello": "world"}});
+        let parsed = parse_agent_response(&raw);
+        assert_eq!(parsed["echo"]["hello"], "world");
+    }
+
+    #[test]
+    fn parse_agent_response_returns_input_when_inner_not_json() {
+        let raw = serde_json::json!({"response": "just plain text"});
+        let parsed = parse_agent_response(&raw);
+        assert_eq!(parsed["response"], "just plain text");
+    }
+
+    #[test]
+    fn persist_measurement_writes_row_from_wrapped_response() {
+        use crate::agent_runner::AgentRunner;
+        use crate::config::CrucibleConfig;
+        use crate::db::Database;
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        let toml_str = r#"
+            [orchestrator]
+            db_path = "/tmp/crucible-test.db"
+            artifact_dir = "/tmp/crucible-artifacts"
+            [vm]
+            kernel_src = "/tmp/k"
+            guest_rootfs = "/tmp/r"
+            vfio_device = "00:00.0"
+            [measurement]
+            [agents]
+        "#;
+        let config: CrucibleConfig = toml::from_str(toml_str).unwrap();
+        let db = Database::open_in_memory().unwrap();
+        let runner =
+            AgentRunner::new(PathBuf::from("python3"), PathBuf::from("/tmp"), Duration::from_secs(1));
+        let orch = Orchestrator::new(config, db, runner);
+
+        let cycle_id = orch.db.create_cycle("test_game", 12345).unwrap();
+        let agent_result = serde_json::json!({
+            "response": "{\"fps_avg\": 60.0, \"fps_p1\": 45.0, \"frame_time_p99_ms\": 22.5, \"psi_cpu_avg\": 0.4, \"psi_memory_avg\": 1.1}"
+        });
+        orch.persist_measurement(cycle_id, "baseline", &agent_result)
+            .unwrap();
+
+        let rows = orch.db.get_measurements(cycle_id, "baseline").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!((rows[0].fps_avg - 60.0).abs() < f64::EPSILON);
+        assert!((rows[0].fps_p1 - 45.0).abs() < f64::EPSILON);
+        assert!((rows[0].frame_time_p99_ms - 22.5).abs() < f64::EPSILON);
+        assert!((rows[0].psi_cpu_avg - 0.4).abs() < f64::EPSILON);
+        assert!((rows[0].psi_memory_avg - 1.1).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn persist_measurement_defaults_missing_fields_to_zero() {
+        use crate::agent_runner::AgentRunner;
+        use crate::config::CrucibleConfig;
+        use crate::db::Database;
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        let toml_str = r#"
+            [orchestrator]
+            db_path = "/tmp/crucible-test2.db"
+            artifact_dir = "/tmp/crucible-artifacts"
+            [vm]
+            kernel_src = "/tmp/k"
+            guest_rootfs = "/tmp/r"
+            vfio_device = "00:00.0"
+            [measurement]
+            [agents]
+        "#;
+        let config: CrucibleConfig = toml::from_str(toml_str).unwrap();
+        let db = Database::open_in_memory().unwrap();
+        let runner =
+            AgentRunner::new(PathBuf::from("python3"), PathBuf::from("/tmp"), Duration::from_secs(1));
+        let orch = Orchestrator::new(config, db, runner);
+
+        let cycle_id = orch.db.create_cycle("test_game", 12345).unwrap();
+        let agent_result = serde_json::json!({"response": "{\"fps_avg\": 60.0}"});
+        orch.persist_measurement(cycle_id, "baseline", &agent_result)
+            .unwrap();
+
+        let rows = orch.db.get_measurements(cycle_id, "baseline").unwrap();
+        assert_eq!(rows.len(), 1);
+        assert!((rows[0].fps_avg - 60.0).abs() < f64::EPSILON);
+        assert_eq!(rows[0].psi_cpu_avg, 0.0);
+    }
+
+    fn make_orchestrator() -> Orchestrator {
+        use crate::agent_runner::AgentRunner;
+        use crate::config::CrucibleConfig;
+        use crate::db::Database;
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        let toml_str = r#"
+            [orchestrator]
+            db_path = "/tmp/crucible-eval.db"
+            artifact_dir = "/tmp/crucible-artifacts"
+            [vm]
+            kernel_src = "/tmp/k"
+            guest_rootfs = "/tmp/r"
+            vfio_device = "00:00.0"
+            [measurement]
+            [agents]
+        "#;
+        let config: CrucibleConfig = toml::from_str(toml_str).unwrap();
+        let db = Database::open_in_memory().unwrap();
+        let runner = AgentRunner::new(
+            PathBuf::from("python3"),
+            PathBuf::from("/tmp"),
+            Duration::from_secs(1),
+        );
+        Orchestrator::new(config, db, runner)
+    }
+
+    fn insert_phase(orch: &Orchestrator, cycle_id: i64, phase: &str, samples: &[(f64, f64, f64, f64, f64)]) {
+        for (fps, fps_p1, ft, cpu, mem) in samples {
+            orch.db
+                .insert_measurement(cycle_id, phase, *fps, *fps_p1, *ft, *cpu, *mem)
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn run_evaluation_accept_when_fps_significantly_higher() {
+        let orch = make_orchestrator();
+        let cycle_id = orch.db.create_cycle("g", 1).unwrap();
+        insert_phase(
+            &orch,
+            cycle_id,
+            "baseline",
+            &[
+                (60.0, 45.0, 25.0, 0.5, 1.2),
+                (61.0, 46.0, 24.5, 0.5, 1.1),
+                (59.5, 44.5, 25.5, 0.5, 1.2),
+                (60.5, 45.5, 24.8, 0.5, 1.2),
+                (60.2, 45.2, 25.1, 0.5, 1.2),
+            ],
+        );
+        insert_phase(
+            &orch,
+            cycle_id,
+            "comparison",
+            &[
+                (75.0, 60.0, 18.0, 0.4, 1.0),
+                (76.0, 61.0, 17.5, 0.4, 1.0),
+                (74.5, 59.5, 18.5, 0.4, 1.0),
+                (75.5, 60.5, 17.8, 0.4, 1.0),
+                (75.2, 60.2, 18.1, 0.4, 1.0),
+            ],
+        );
+
+        let verdict = orch.run_evaluation(cycle_id).unwrap();
+        assert_eq!(verdict, Verdict::Accept);
+        let rows = orch.db.get_evaluations(cycle_id).unwrap();
+        assert_eq!(rows.len(), METRIC_DEFS.len());
+    }
+
+    #[test]
+    fn run_evaluation_regressed_when_fps_drops() {
+        let orch = make_orchestrator();
+        let cycle_id = orch.db.create_cycle("g", 1).unwrap();
+        insert_phase(
+            &orch,
+            cycle_id,
+            "baseline",
+            &[
+                (60.0, 45.0, 25.0, 0.5, 1.2),
+                (61.0, 46.0, 24.5, 0.5, 1.1),
+                (59.5, 44.5, 25.5, 0.5, 1.2),
+                (60.5, 45.5, 24.8, 0.5, 1.2),
+                (60.2, 45.2, 25.1, 0.5, 1.2),
+            ],
+        );
+        insert_phase(
+            &orch,
+            cycle_id,
+            "comparison",
+            &[
+                (45.0, 30.0, 35.0, 0.5, 1.2),
+                (46.0, 31.0, 34.5, 0.5, 1.2),
+                (44.5, 29.5, 35.5, 0.5, 1.2),
+                (45.5, 30.5, 34.8, 0.5, 1.2),
+                (45.2, 30.2, 35.1, 0.5, 1.2),
+            ],
+        );
+
+        let verdict = orch.run_evaluation(cycle_id).unwrap();
+        assert_eq!(verdict, Verdict::Regressed);
+    }
+
+    #[test]
+    fn run_evaluation_neutral_with_single_sample_per_phase() {
+        let orch = make_orchestrator();
+        let cycle_id = orch.db.create_cycle("g", 1).unwrap();
+        insert_phase(&orch, cycle_id, "baseline", &[(60.0, 45.0, 25.0, 0.5, 1.2)]);
+        insert_phase(&orch, cycle_id, "comparison", &[(70.0, 55.0, 20.0, 0.4, 1.0)]);
+
+        let verdict = orch.run_evaluation(cycle_id).unwrap();
+        assert_eq!(verdict, Verdict::Neutral);
+        let rows = orch.db.get_evaluations(cycle_id).unwrap();
+        assert_eq!(rows.len(), METRIC_DEFS.len());
+        for r in &rows {
+            assert_eq!(r.verdict, "neutral");
+        }
+    }
 
     #[test]
     fn build_agent_task_envelope() {
