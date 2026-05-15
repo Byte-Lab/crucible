@@ -8,6 +8,7 @@ from agents.common.protocol import (
     TaskEnvelope,
     TaskStatus,
 )
+from guest.protocol import GuestCommand
 
 
 def test_task_envelope_from_json():
@@ -40,6 +41,28 @@ def test_result_envelope_to_json():
     parsed = json.loads(raw)
     assert parsed["status"] == "success"
     assert parsed["usage"]["api_calls"] == 3
+
+
+def test_guest_command_run_benchmark_roundtrip():
+    cmd = GuestCommand(
+        cmd="run_benchmark",
+        name="stress-ng",
+        args=["--cpu", "4"],
+        duration_secs=30,
+    )
+    raw = cmd.model_dump_json(exclude_none=True)
+    parsed = json.loads(raw)
+    assert parsed == {
+        "cmd": "run_benchmark",
+        "args": ["--cpu", "4"],
+        "name": "stress-ng",
+        "duration_secs": 30,
+    }
+    restored = GuestCommand.model_validate_json(raw)
+    assert restored.cmd == "run_benchmark"
+    assert restored.name == "stress-ng"
+    assert restored.args == ["--cpu", "4"]
+    assert restored.duration_secs == 30
 
 
 def test_result_envelope_failure_status():

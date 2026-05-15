@@ -11,6 +11,8 @@ class GuestCommand(BaseModel):
     config: dict[str, Any] | None = None
     events: list[dict[str, Any]] | None = None
     path: str | None = None
+    name: str | None = None
+    duration_secs: int | None = None
 
 
 class GuestResponse(BaseModel):

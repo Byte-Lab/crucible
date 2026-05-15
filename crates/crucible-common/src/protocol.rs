@@ -75,6 +75,11 @@ pub enum GuestCommand {
         path: String,
     },
     GetMetrics,
+    RunBenchmark {
+        name: String,
+        args: Vec<String>,
+        duration_secs: u32,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -140,7 +145,7 @@ mod tests {
     #[test]
     fn agent_name_serializes_as_snake_case() {
         let name = AgentName::GameSelector;
-        let json = serde_json::to_value(&name).unwrap();
+        let json = serde_json::to_value(name).unwrap();
         assert_eq!(json, serde_json::json!("game_selector"));
     }
 
@@ -162,6 +167,32 @@ mod tests {
         if let GuestCommand::LaunchGame { app_id, args } = parsed {
             assert_eq!(app_id, 1091500);
             assert_eq!(args, vec!["--benchmark"]);
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn guest_command_run_benchmark_roundtrip() {
+        let cmd = GuestCommand::RunBenchmark {
+            name: "stress-ng".to_string(),
+            args: vec!["--cpu".to_string(), "4".to_string()],
+            duration_secs: 30,
+        };
+        let json = serde_json::to_value(&cmd).unwrap();
+        assert_eq!(json["cmd"], "run_benchmark");
+        assert_eq!(json["name"], "stress-ng");
+        assert_eq!(json["duration_secs"], 30);
+        let parsed: GuestCommand = serde_json::from_value(json).unwrap();
+        if let GuestCommand::RunBenchmark {
+            name,
+            args,
+            duration_secs,
+        } = parsed
+        {
+            assert_eq!(name, "stress-ng");
+            assert_eq!(args, vec!["--cpu", "4"]);
+            assert_eq!(duration_secs, 30);
         } else {
             panic!("wrong variant");
         }
