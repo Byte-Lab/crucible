@@ -789,8 +789,12 @@ mod tests {
         "#;
         let config: CrucibleConfig = toml::from_str(toml_str).unwrap();
         let db = Database::open_in_memory().unwrap();
-        let runner =
-            AgentRunner::new(PathBuf::from("python3"), PathBuf::from("/tmp"), Duration::from_secs(1));
+        let runner = AgentRunner::new(
+            PathBuf::from("python3"),
+            PathBuf::from("/tmp"),
+            Duration::from_secs(1),
+            std::env::temp_dir(),
+        );
         let orch = Orchestrator::new(config, db, runner);
 
         let cycle_id = orch.db.create_cycle("test_game", 12345).unwrap();
@@ -830,8 +834,12 @@ mod tests {
         "#;
         let config: CrucibleConfig = toml::from_str(toml_str).unwrap();
         let db = Database::open_in_memory().unwrap();
-        let runner =
-            AgentRunner::new(PathBuf::from("python3"), PathBuf::from("/tmp"), Duration::from_secs(1));
+        let runner = AgentRunner::new(
+            PathBuf::from("python3"),
+            PathBuf::from("/tmp"),
+            Duration::from_secs(1),
+            std::env::temp_dir(),
+        );
         let orch = Orchestrator::new(config, db, runner);
 
         let cycle_id = orch.db.create_cycle("test_game", 12345).unwrap();
@@ -869,6 +877,7 @@ mod tests {
             PathBuf::from("python3"),
             PathBuf::from("/tmp"),
             Duration::from_secs(1),
+            std::env::temp_dir(),
         );
         Orchestrator::new(config, db, runner)
     }

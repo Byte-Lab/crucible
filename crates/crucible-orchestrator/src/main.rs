@@ -37,10 +37,12 @@ async fn main() -> anyhow::Result<()> {
     tracing::info!("database initialized");
 
     let agents_dir = std::env::current_dir()?.join("agents");
+    let artifact_dir = PathBuf::from(&config.orchestrator.artifact_dir);
     let agent_runner = crucible_orchestrator::agent_runner::AgentRunner::new(
         PathBuf::from("python3"),
         agents_dir,
         std::time::Duration::from_secs(config.agents.timeout_secs),
+        artifact_dir,
     );
 
     let max_cycles = if cli.single_cycle { 1 } else { cli.max_cycles };

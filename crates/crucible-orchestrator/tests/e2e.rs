@@ -97,6 +97,7 @@ async fn synthetic_cycle_writes_measurements_and_evaluation() {
         PathBuf::from("python3"),
         agents_dir,
         std::time::Duration::from_secs(config.agents.timeout_secs),
+        artifact_dir.clone(),
     );
 
     let mut orchestrator = crucible_orchestrator::orchestrator::Orchestrator::new(
@@ -148,6 +149,52 @@ async fn synthetic_cycle_writes_measurements_and_evaluation() {
             "marginal/iterated cycle must record at least one patch"
         );
     }
+
+    // Tool-leak verification. Every agent's stderr is teed to
+    // <artifact_dir>/agents/<task_id>.stderr. Each `tool_call:` line emitted
+    // by claude_agent.py must reference a tool prefixed with
+    // `mcp__crucible__`; anything else means a built-in tool slipped past
+    // `_BUILTIN_TOOLS_TO_DISALLOW` and is potentially being billed against
+    // the user's plan. Skip silently if the dir doesn't exist (echo-only
+    // cycles wouldn't produce one).
+    let agents_artifact_dir = artifact_dir.join("agents");
+    let mut scanned = 0usize;
+    let mut leaks: Vec<String> = Vec::new();
+    if agents_artifact_dir.is_dir() {
+        for entry in std::fs::read_dir(&agents_artifact_dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if path.extension().and_then(|s| s.to_str()) != Some("stderr") {
+                continue;
+            }
+            scanned += 1;
+            let contents = std::fs::read_to_string(&path).unwrap();
+            for (lineno, line) in contents.lines().enumerate() {
+                let Some(rest) = line.strip_prefix("tool_call: ") else {
+                    continue;
+                };
+                if !rest.starts_with("mcp__crucible__") {
+                    leaks.push(format!(
+                        "{}:{}: {}",
+                        path.display(),
+                        lineno + 1,
+                        line
+                    ));
+                }
+            }
+        }
+    }
+    eprintln!(
+        "e2e: tool-leak scan agents_dir={} files={} leaks={}",
+        agents_artifact_dir.display(),
+        scanned,
+        leaks.len(),
+    );
+    assert!(
+        leaks.is_empty(),
+        "non-crucible tool calls leaked past _BUILTIN_TOOLS_TO_DISALLOW:\n{}",
+        leaks.join("\n")
+    );
 }
 
 fn check_prerequisites() -> Result<(), String> {

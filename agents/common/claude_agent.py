@@ -1,5 +1,6 @@
 import asyncio
 import json
+import sys
 from typing import Any
 
 from claude_agent_sdk import (
@@ -141,6 +142,16 @@ class ClaudeAgentBase(AgentBase):
                     elif isinstance(block, ToolUseBlock):
                         self.log(
                             f"tool call: {block.name}({json.dumps(block.input)})"
+                        )
+                        # Also emit the tool name (no input payload) to
+                        # stderr so the orchestrator's stderr-tee artifact
+                        # can be grepped for built-in tool calls leaking
+                        # past _BUILTIN_TOOLS_TO_DISALLOW. Names only:
+                        # inputs may contain file contents or secrets.
+                        print(
+                            f"tool_call: {block.name}",
+                            file=sys.stderr,
+                            flush=True,
                         )
                 # Each assistant turn overwrites — the final non-empty turn
                 # before ResultMessage wins. Mirrors the old code's

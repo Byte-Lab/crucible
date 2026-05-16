@@ -46,6 +46,7 @@ async fn full_round_trip_echo_agent_to_db() {
         PathBuf::from("python3"),
         workspace_root.join("agents"),
         std::time::Duration::from_secs(10),
+        std::env::temp_dir(),
     );
 
     let task = crucible_common::protocol::TaskEnvelope {
