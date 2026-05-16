@@ -129,6 +129,25 @@ async fn synthetic_cycle_writes_measurements_and_evaluation() {
 
     let evals = db.get_evaluations(cycle.id).unwrap();
     assert!(!evals.is_empty(), "no evaluation rows persisted");
+
+    // Iterate-path breadcrumb. With runs_per_phase=1 the Welch's t-test
+    // degenerates and most synthetic runs land Neutral, recording 0-1
+    // patches. A Marginal verdict (or >1 patch row) proves the
+    // Evaluate → Iterate → Analyze loop fired this run.
+    let patches = db.list_patches_for_cycle(cycle.id).unwrap();
+    eprintln!(
+        "e2e: cycle {} terminal={} patches={} evals={}",
+        cycle.id,
+        cycle.status,
+        patches.len(),
+        evals.len(),
+    );
+    if cycle.status == "marginal" || patches.len() > 1 {
+        assert!(
+            !patches.is_empty(),
+            "marginal/iterated cycle must record at least one patch"
+        );
+    }
 }
 
 fn check_prerequisites() -> Result<(), String> {

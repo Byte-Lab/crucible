@@ -228,6 +228,25 @@ impl Database {
             .context("failed to get patch")
     }
 
+    pub fn list_patches_for_cycle(&self, cycle_id: i64) -> Result<Vec<Patch>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT id, cycle_id, layer, diff_path, applied_at, reverted_at \
+             FROM patches WHERE cycle_id = ?1 ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map(params![cycle_id], |row| {
+            Ok(Patch {
+                id: row.get(0)?,
+                cycle_id: row.get(1)?,
+                layer: row.get(2)?,
+                diff_path: row.get(3)?,
+                applied_at: row.get(4)?,
+                reverted_at: row.get(5)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .context("failed to collect patches")
+    }
+
     pub fn mark_patch_reverted(&self, id: i64) -> Result<()> {
         self.conn.execute(
             "UPDATE patches SET reverted_at = datetime('now') WHERE id = ?1",
@@ -327,6 +346,32 @@ mod tests {
         assert_eq!(patch.layer, "kernel");
         assert_eq!(patch.diff_path, "/tmp/patches/001.diff");
         assert!(patch.reverted_at.is_none());
+    }
+
+    #[test]
+    fn list_patches_for_cycle_returns_all_in_insertion_order() {
+        let db = test_db();
+        let cycle_id = db.create_cycle("test_game", 12345).unwrap();
+        db.insert_patch(cycle_id, "kernel", "/tmp/patches/001.diff")
+            .unwrap();
+        db.insert_patch(cycle_id, "userspace", "/tmp/patches/002.diff")
+            .unwrap();
+        let other_cycle = db.create_cycle("other_game", 67890).unwrap();
+        db.insert_patch(other_cycle, "tuning", "/tmp/patches/003.diff")
+            .unwrap();
+        let patches = db.list_patches_for_cycle(cycle_id).unwrap();
+        assert_eq!(patches.len(), 2);
+        assert_eq!(patches[0].diff_path, "/tmp/patches/001.diff");
+        assert_eq!(patches[0].layer, "kernel");
+        assert_eq!(patches[1].diff_path, "/tmp/patches/002.diff");
+        assert_eq!(patches[1].layer, "userspace");
+    }
+
+    #[test]
+    fn list_patches_for_cycle_empty_for_unknown_cycle() {
+        let db = test_db();
+        let patches = db.list_patches_for_cycle(999).unwrap();
+        assert!(patches.is_empty());
     }
 
     #[test]
