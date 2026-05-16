@@ -15,11 +15,19 @@ Respond with JSON: {"bottleneck": "<subsystem>", "severity": "high|medium|low", 
         game = context.get("game_name", "unknown")
         metrics = context.get("metrics", {})
         trace_paths = context.get("trace_paths", [])
-        msg = f"Analyze profiling data for {game}.\n"
+        attempt = context.get("attempt_number", 1)
+        previous_attempts = context.get("previous_attempts", [])
+        msg = f"Analyze profiling data for {game} (attempt {attempt}).\n"
         if metrics:
             msg += f"Metrics:\n{json.dumps(metrics, indent=2)}\n"
         if trace_paths:
             msg += f"Traces: {trace_paths}\n"
+        if previous_attempts:
+            msg += (
+                f"Previous optimization attempts failed at the margin: "
+                f"{json.dumps(previous_attempts)}.\n"
+                f"Consider alternate bottlenecks; do not re-recommend the same subsystem.\n"
+            )
         msg += "Use tools to identify the primary bottleneck."
         return msg
 
