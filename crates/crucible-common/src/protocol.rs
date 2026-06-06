@@ -224,6 +224,24 @@ mod tests {
     }
 
     #[test]
+    fn guest_response_fetch_file_carries_contents() {
+        // Wire contract for fetch_file (guest/crucible_guest_agent.py
+        // `_handle_fetch_file`): the response data must carry the file bytes
+        // as base64, the true on-disk size, and a truncation flag — not just
+        // the size. The profiler's game-mode tools depend on this to pull
+        // MangoHud CSVs out of the guest.
+        let raw = r#"{"status":"ok","data":{"path":"/tmp/mh.csv","size":24,"truncated":false,"contents_b64":"ZnJhbWV0aW1lLGZwcwoxNi42LDYwLjIK"}}"#;
+        let parsed: GuestResponse = serde_json::from_str(raw).unwrap();
+        if let GuestResponse::Ok { data } = parsed {
+            assert_eq!(data["size"], 24);
+            assert_eq!(data["truncated"], false);
+            assert!(data["contents_b64"].is_string());
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
     fn guest_response_ok_roundtrip() {
         let resp = GuestResponse::Ok {
             data: serde_json::json!({"pid": 4521, "cgroup": "crucible/game"}),

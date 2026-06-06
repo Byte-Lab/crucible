@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -22,6 +23,10 @@ logger = logging.getLogger(__name__)
 VSOCK_PORT = 5000
 CGROUP_ROOT = Path("/sys/fs/cgroup/crucible")
 _BOOT_TIME: float = time.monotonic()
+
+# Cap fetch_file payloads so a runaway log can't blow up the vsock frame
+# (base64 inflates ~33%; 8 MiB raw stays well under any framing concern).
+FETCH_FILE_MAX_BYTES = 8 * 1024 * 1024
 
 
 # ---------------------------------------------------------------------------
@@ -203,9 +208,16 @@ class GuestAgentHandler:
             return GuestResponse.error(f"file not found: {file_path}")
         try:
             size = p.stat().st_size
-            return GuestResponse.ok({"path": str(p), "size": size})
+            with p.open("rb") as fh:
+                contents = fh.read(FETCH_FILE_MAX_BYTES)
+            return GuestResponse.ok({
+                "path": str(p),
+                "size": size,
+                "truncated": size > FETCH_FILE_MAX_BYTES,
+                "contents_b64": base64.b64encode(contents).decode("ascii"),
+            })
         except OSError as exc:
-            return GuestResponse.error(f"cannot stat file: {exc}")
+            return GuestResponse.error(f"cannot read file: {exc}")
 
     def _handle_get_metrics(self, cmd: GuestCommand) -> GuestResponse:
         system_psi = _read_system_psi()
