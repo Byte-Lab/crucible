@@ -126,15 +126,11 @@ impl VmManager {
                     timeout.as_secs()
                 );
             }
-            match vsock_client.health_check().await {
-                Ok(resp) => {
-                    if let crucible_common::protocol::GuestResponse::Ok { .. } = resp
-                    {
-                        tracing::info!("VM is ready");
-                        return Ok(());
-                    }
-                }
-                Err(_) => {}
+            if let Ok(crucible_common::protocol::GuestResponse::Ok { .. }) =
+                vsock_client.health_check().await
+            {
+                tracing::info!("VM is ready");
+                return Ok(());
             }
             tokio::time::sleep(poll_interval).await;
         }

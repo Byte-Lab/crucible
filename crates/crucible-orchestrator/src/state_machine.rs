@@ -34,6 +34,7 @@ impl CycleState {
         }
     }
 
+    #[allow(clippy::should_implement_trait)] // Option-returning, unlike FromStr
     pub fn from_str(s: &str) -> Option<CycleState> {
         match s {
             "idle" => Some(CycleState::Idle),

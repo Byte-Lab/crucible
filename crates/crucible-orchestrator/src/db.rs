@@ -159,6 +159,7 @@ impl Database {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)] // mirrors the measurements row shape
     pub fn insert_measurement(
         &self,
         cycle_id: i64,
