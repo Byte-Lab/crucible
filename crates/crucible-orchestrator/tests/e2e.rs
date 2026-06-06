@@ -1,14 +1,22 @@
-//! End-to-end smoke test for the synthetic loop.
+//! End-to-end smoke tests for the synthetic and game-mode loops.
 //!
-//! Skipped by default. Set `CRUCIBLE_E2E=1` to run, plus:
+//! Skipped by default. Set `CRUCIBLE_E2E=1` to run the synthetic loop, or
+//! `CRUCIBLE_E2E_GPU=1` for the game-mode loop. Both need:
 //!   - the bundled `claude` CLI must have been logged in via `claude /login`
 //!     once on this machine; Claude-backed agents now bill against the user's
 //!     Pro/Max plan via `claude-agent-sdk` (no `ANTHROPIC_API_KEY` is read)
 //!   - `vng` on PATH (virtme-ng)
 //!   - `CRUCIBLE_KERNEL_SRC` (default `/home/void/upstream/linux`) — checked-out
 //!     kernel source tree usable by `KernelBuilder::build_kernel`
-//!   - `CRUCIBLE_ROOTFS_PATH` (default `~/.crucible/rootfs`) — built by
-//!     `scripts/setup-rootfs.sh` (must contain a `.crucible-built` stamp file)
+//!
+//! The synthetic loop also needs `CRUCIBLE_ROOTFS_PATH` (default
+//! `~/.crucible/rootfs`, built by `scripts/setup-rootfs.sh`, `.crucible-built`
+//! stamp). The game loop needs `CRUCIBLE_GAME_ROOTFS_PATH` (default
+//! `~/.crucible/game-rootfs`, built by `scripts/setup-game-rootfs.sh`,
+//! `.crucible-game-built` stamp) and optionally `CRUCIBLE_VFIO_DEVICE` for
+//! real GPU passthrough — without it Mesa's lavapipe renders vkmark in
+//! software, which still exercises the whole MangoHud → fetch_file →
+//! metrics path.
 //!
 //! Each missing prerequisite produces one specific error before any
 //! orchestrator code runs. A passing run leaves a row in `cycles` with a
@@ -18,22 +26,21 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-#[tokio::test]
-async fn synthetic_cycle_writes_measurements_and_evaluation() {
-    if std::env::var("CRUCIBLE_E2E").is_err() {
-        eprintln!("e2e skipped: set CRUCIBLE_E2E=1 to run (requires vng, kernel src, rootfs)");
-        return;
-    }
+struct CycleOutcome {
+    db_path: PathBuf,
+    artifact_dir: PathBuf,
+    // Keeps the tempdir (and thus db/artifacts) alive until dropped.
+    _tmp_dir: tempfile::TempDir,
+}
 
-    check_prerequisites().expect("e2e prerequisites unmet");
-
+/// Drive one full cycle with the given `[measurement]` body and rootfs,
+/// then verify the durable rows and scan agent stderr for tool leaks.
+async fn run_cycle_and_verify(measurement_toml: &str, rootfs: &str, vfio_device: &str) -> CycleOutcome {
     let tmp_dir = tempfile::tempdir().unwrap();
     let db_path = tmp_dir.path().join("e2e.db");
     let artifact_dir = tmp_dir.path().join("artifacts");
     let kernel_src = std::env::var("CRUCIBLE_KERNEL_SRC")
         .unwrap_or_else(|_| "/home/void/upstream/linux".to_string());
-    let rootfs = std::env::var("CRUCIBLE_ROOTFS_PATH")
-        .unwrap_or_else(|_| format!("{}/.crucible/rootfs", std::env::var("HOME").unwrap()));
     let guest_payload = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .unwrap()
@@ -60,16 +67,12 @@ async fn synthetic_cycle_writes_measurements_and_evaluation() {
         guest_payload = "{guest_payload}"
         memory = "4G"
         cpus = 4
-        vfio_device = ""
+        vfio_device = "{vfio_device}"
         boot_timeout_secs = 180
         vsock_cid = 3
 
         [measurement]
-        mode = "synthetic"
-        benchmark_args = ["--cpu", "2"]
-        benchmark_duration_secs = 10
-        runs_per_phase = 1
-        warmup_runs = 0
+        {measurement}
 
         [agents]
         timeout_secs = 600
@@ -79,6 +82,8 @@ async fn synthetic_cycle_writes_measurements_and_evaluation() {
         kernel = kernel_src,
         rootfs = rootfs,
         guest_payload = guest_payload,
+        vfio_device = vfio_device,
+        measurement = measurement_toml,
     )
     .unwrap();
 
@@ -107,7 +112,7 @@ async fn synthetic_cycle_writes_measurements_and_evaluation() {
     orchestrator
         .run_cycle()
         .await
-        .expect("synthetic cycle should complete end-to-end");
+        .expect("cycle should complete end-to-end");
 
     // Reopen the DB to verify durable rows rather than peeking at the
     // orchestrator's in-memory handle. With a fresh DB this is the first
@@ -132,9 +137,9 @@ async fn synthetic_cycle_writes_measurements_and_evaluation() {
     assert!(!evals.is_empty(), "no evaluation rows persisted");
 
     // Iterate-path breadcrumb. With runs_per_phase=1 the Welch's t-test
-    // degenerates and most synthetic runs land Neutral, recording 0-1
-    // patches. A Marginal verdict (or >1 patch row) proves the
-    // Evaluate → Iterate → Analyze loop fired this run.
+    // degenerates and most runs land Neutral, recording 0-1 patches. A
+    // Marginal verdict (or >1 patch row) proves the Evaluate → Iterate →
+    // Analyze loop fired this run.
     let patches = db.list_patches_for_cycle(cycle.id).unwrap();
     eprintln!(
         "e2e: cycle {} terminal={} patches={} evals={}",
@@ -150,13 +155,23 @@ async fn synthetic_cycle_writes_measurements_and_evaluation() {
         );
     }
 
-    // Tool-leak verification. Every agent's stderr is teed to
-    // <artifact_dir>/agents/<task_id>.stderr. Each `tool_call:` line emitted
-    // by claude_agent.py must reference a tool prefixed with
-    // `mcp__crucible__`; anything else means a built-in tool slipped past
-    // `_BUILTIN_TOOLS_TO_DISALLOW` and is potentially being billed against
-    // the user's plan. Skip silently if the dir doesn't exist (echo-only
-    // cycles wouldn't produce one).
+    scan_for_tool_leaks(&artifact_dir);
+
+    CycleOutcome {
+        db_path,
+        artifact_dir,
+        _tmp_dir: tmp_dir,
+    }
+}
+
+/// Tool-leak verification. Every agent's stderr is teed to
+/// <artifact_dir>/agents/<task_id>.stderr. Each `tool_call:` line emitted
+/// by claude_agent.py must reference a tool prefixed with
+/// `mcp__crucible__`; anything else means a built-in tool slipped past
+/// `_BUILTIN_TOOLS_TO_DISALLOW` and is potentially being billed against
+/// the user's plan. Skip silently if the dir doesn't exist (echo-only
+/// cycles wouldn't produce one).
+fn scan_for_tool_leaks(artifact_dir: &Path) {
     let agents_artifact_dir = artifact_dir.join("agents");
     let mut scanned = 0usize;
     let mut leaks: Vec<String> = Vec::new();
@@ -197,7 +212,81 @@ async fn synthetic_cycle_writes_measurements_and_evaluation() {
     );
 }
 
-fn check_prerequisites() -> Result<(), String> {
+#[tokio::test]
+async fn synthetic_cycle_writes_measurements_and_evaluation() {
+    if std::env::var("CRUCIBLE_E2E").is_err() {
+        eprintln!("e2e skipped: set CRUCIBLE_E2E=1 to run (requires vng, kernel src, rootfs)");
+        return;
+    }
+
+    check_common_prerequisites().expect("e2e prerequisites unmet");
+    let rootfs = std::env::var("CRUCIBLE_ROOTFS_PATH")
+        .unwrap_or_else(|_| format!("{}/.crucible/rootfs", std::env::var("HOME").unwrap()));
+    assert!(
+        Path::new(&rootfs).join(".crucible-built").exists(),
+        "rootfs at {} missing .crucible-built stamp (run scripts/setup-rootfs.sh)",
+        rootfs
+    );
+
+    run_cycle_and_verify(
+        r#"mode = "synthetic"
+        benchmark_args = ["--cpu", "2"]
+        benchmark_duration_secs = 10
+        runs_per_phase = 1
+        warmup_runs = 0"#,
+        &rootfs,
+        "",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn gpu_game_cycle_produces_nonzero_fps() {
+    if std::env::var("CRUCIBLE_E2E_GPU").is_err() {
+        eprintln!(
+            "e2e-gpu skipped: set CRUCIBLE_E2E_GPU=1 to run (requires vng, kernel src, game rootfs)"
+        );
+        return;
+    }
+
+    check_common_prerequisites().expect("e2e-gpu prerequisites unmet");
+    let rootfs = std::env::var("CRUCIBLE_GAME_ROOTFS_PATH").unwrap_or_else(|_| {
+        format!("{}/.crucible/game-rootfs", std::env::var("HOME").unwrap())
+    });
+    assert!(
+        Path::new(&rootfs).join(".crucible-game-built").exists(),
+        "game rootfs at {} missing .crucible-game-built stamp (run scripts/setup-game-rootfs.sh)",
+        rootfs
+    );
+    // Optional real passthrough; empty string renders via lavapipe.
+    let vfio_device = std::env::var("CRUCIBLE_VFIO_DEVICE").unwrap_or_default();
+
+    let outcome = run_cycle_and_verify(
+        r#"mode = "game"
+        game_benchmark = "vkmark"
+        runs_per_phase = 1
+        warmup_runs = 0"#,
+        &rootfs,
+        &vfio_device,
+    )
+    .await;
+
+    // The discriminator against the synthetic path: synthetic runs emit
+    // fps_avg = 0, so non-zero fps proves real frames flowed MangoHud →
+    // fetch_file → parse_mangohud_csv → persist_measurement.
+    let db = crucible_orchestrator::db::Database::open(&outcome.db_path).unwrap();
+    for phase in ["baseline", "comparison"] {
+        let rows = db.get_measurements(1, phase).unwrap();
+        assert!(
+            rows.iter().any(|m| m.fps_avg > 0.0),
+            "{phase} measurements all have fps_avg == 0 — MangoHud frame data \
+             did not flow (artifacts at {})",
+            outcome.artifact_dir.display()
+        );
+    }
+}
+
+fn check_common_prerequisites() -> Result<(), String> {
     if which("vng").is_none() {
         return Err("vng (virtme-ng) is not on PATH".to_string());
     }
@@ -207,14 +296,6 @@ fn check_prerequisites() -> Result<(), String> {
         return Err(format!(
             "CRUCIBLE_KERNEL_SRC ({}) is not a git checkout",
             kernel_src
-        ));
-    }
-    let rootfs = std::env::var("CRUCIBLE_ROOTFS_PATH")
-        .unwrap_or_else(|_| format!("{}/.crucible/rootfs", std::env::var("HOME").unwrap()));
-    if !Path::new(&rootfs).join(".crucible-built").exists() {
-        return Err(format!(
-            "rootfs at {} missing .crucible-built stamp (run scripts/setup-rootfs.sh)",
-            rootfs
         ));
     }
     Ok(())

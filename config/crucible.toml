@@ -15,10 +15,13 @@ vsock_cid = 3
 
 [measurement]
 # "synthetic" drives stress-ng in the guest (no Steam/Wine needed).
-# "game" runs the real Steam path via the profiler agent's classic tools.
+# "game" drives a native GPU benchmark (vkmark/glmark2) under MangoHud in
+# the game rootfs built by scripts/setup-game-rootfs.sh.
 mode = "synthetic"
 benchmark_args = ["--cpu", "2"]
 benchmark_duration_secs = 30
+# Native benchmark used when mode = "game": "vkmark" or "glmark2".
+game_benchmark = "vkmark"
 runs_per_phase = 5
 warmup_runs = 1
 significance_threshold = 0.05
