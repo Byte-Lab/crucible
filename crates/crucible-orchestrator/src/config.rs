@@ -69,6 +69,10 @@ pub struct MeasurementConfig {
     /// Per-run duration for the synthetic benchmark, in seconds.
     #[serde(default = "default_benchmark_duration")]
     pub benchmark_duration_secs: u32,
+    /// Native GPU benchmark driven when `mode = "game"`: `"vkmark"` or
+    /// `"glmark2"`. The guest agent allow-lists these. Ignored otherwise.
+    #[serde(default = "default_game_benchmark")]
+    pub game_benchmark: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -103,7 +107,7 @@ pub struct OptimizerConfig {
     pub allowed_layers: Vec<String>,
 }
 
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Default, Deserialize)]
 pub struct GamePlayerConfig {
     #[serde(default)]
     pub enabled: bool,
@@ -157,6 +161,9 @@ fn default_benchmark_args() -> Vec<String> {
 fn default_benchmark_duration() -> u32 {
     30
 }
+fn default_game_benchmark() -> String {
+    "vkmark".to_string()
+}
 fn default_model() -> String {
     "claude-sonnet-4-20250514".to_string()
 }
@@ -191,6 +198,7 @@ impl Default for MeasurementConfig {
             mode: default_mode(),
             benchmark_args: default_benchmark_args(),
             benchmark_duration_secs: default_benchmark_duration(),
+            game_benchmark: default_game_benchmark(),
         }
     }
 }
@@ -215,12 +223,6 @@ impl Default for OptimizerConfig {
             max_attempts_per_bottleneck: default_max_attempts(),
             allowed_layers: default_allowed_layers(),
         }
-    }
-}
-
-impl Default for GamePlayerConfig {
-    fn default() -> Self {
-        Self { enabled: false }
     }
 }
 
@@ -276,6 +278,26 @@ mod tests {
         assert_eq!(config.measurement.mode, "game");
         assert_eq!(config.measurement.benchmark_args, vec!["--vm", "1"]);
         assert_eq!(config.measurement.benchmark_duration_secs, 90);
+        assert_eq!(config.measurement.game_benchmark, "vkmark"); // default
+    }
+
+    #[test]
+    fn measurement_game_benchmark_can_be_overridden() {
+        let toml_str = r#"
+            [orchestrator]
+            db_path = "/tmp/x.db"
+            artifact_dir = "/tmp/x"
+            [vm]
+            kernel_src = "/tmp/k"
+            guest_rootfs = "/tmp/r"
+            vfio_device = "none"
+            [measurement]
+            mode = "game"
+            game_benchmark = "glmark2"
+            [agents]
+        "#;
+        let config: CrucibleConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.measurement.game_benchmark, "glmark2");
     }
 
     #[test]

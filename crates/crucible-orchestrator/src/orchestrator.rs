@@ -60,6 +60,35 @@ pub fn build_task_envelope(
 /// Unwrap a Claude-backed agent's `{"response": "<json>"}` envelope.
 /// Falls back to the raw value if `response` is absent or the inner string
 /// is not parseable JSON. Strips ``` fences if present.
+/// Guest-side path where the launch_benchmark handler deposits the MangoHud
+/// frame-time CSV. The profiler fetches it back over vsock after the run.
+pub const GUEST_MANGOHUD_OUTPUT: &str = "/tmp/crucible_mangohud.csv";
+
+/// Build the profiler `TaskEnvelope.context` for a measurement phase.
+/// Shared by the baseline and comparison dispatch sites so the synthetic
+/// and game threading can't drift between them.
+pub fn measurement_context(
+    config: &CrucibleConfig,
+    phase: &str,
+    game_name: &str,
+) -> serde_json::Value {
+    let mut context = serde_json::json!({
+        "action": "measure",
+        "phase": phase,
+        "game": game_name,
+        "runs": config.measurement.runs_per_phase,
+        "workload_kind": config.measurement.mode,
+        "benchmark_args": config.measurement.benchmark_args,
+        "duration_secs": config.measurement.benchmark_duration_secs,
+        "vsock_cid": config.vm.vsock_cid,
+    });
+    if config.measurement.mode == "game" {
+        context["game_benchmark"] = serde_json::json!(config.measurement.game_benchmark);
+        context["mangohud_output"] = serde_json::json!(GUEST_MANGOHUD_OUTPUT);
+    }
+    context
+}
+
 pub fn parse_agent_response(value: &serde_json::Value) -> serde_json::Value {
     let Some(text) = value.get("response").and_then(|v| v.as_str()) else {
         return value.clone();
@@ -374,16 +403,7 @@ impl Orchestrator {
             .update_cycle_status(cycle_id, CycleState::BaselineMeasurement.as_str())?;
         tracing::info!(state = %self.state_machine.state(), "running baseline measurement");
 
-        let baseline_context = serde_json::json!({
-            "action": "measure",
-            "phase": "baseline",
-            "game": game_name,
-            "runs": self.config.measurement.runs_per_phase,
-            "workload_kind": self.config.measurement.mode,
-            "benchmark_args": self.config.measurement.benchmark_args,
-            "duration_secs": self.config.measurement.benchmark_duration_secs,
-            "vsock_cid": self.config.vm.vsock_cid,
-        });
+        let baseline_context = measurement_context(&self.config, "baseline", game_name);
         let baseline_result = self
             .run_agent(AgentName::Profiler, baseline_context)
             .await?;
@@ -548,16 +568,8 @@ impl Orchestrator {
                 "running comparison measurement"
             );
 
-            let comparison_context = serde_json::json!({
-                "action": "measure",
-                "phase": "comparison",
-                "game": game_name,
-                "runs": self.config.measurement.runs_per_phase,
-                "workload_kind": self.config.measurement.mode,
-                "benchmark_args": self.config.measurement.benchmark_args,
-                "duration_secs": self.config.measurement.benchmark_duration_secs,
-                "vsock_cid": self.config.vm.vsock_cid,
-            });
+            let comparison_context =
+                measurement_context(&self.config, "comparison", game_name);
             let comparison_result = self
                 .run_agent(AgentName::Profiler, comparison_context)
                 .await?;
@@ -972,6 +984,41 @@ mod tests {
         for r in &rows {
             assert_eq!(r.verdict, "neutral");
         }
+    }
+
+    #[test]
+    fn measurement_context_synthetic_omits_game_fields() {
+        let orch = make_orchestrator();
+        let ctx = measurement_context(&orch.config, "baseline", "synthetic");
+        assert_eq!(ctx["phase"], "baseline");
+        assert_eq!(ctx["workload_kind"], "synthetic");
+        assert!(ctx.get("game_benchmark").is_none());
+        assert!(ctx.get("mangohud_output").is_none());
+    }
+
+    #[test]
+    fn measurement_context_game_threads_benchmark_and_log_path() {
+        use crate::config::CrucibleConfig;
+
+        let toml_str = r#"
+            [orchestrator]
+            db_path = "/tmp/x.db"
+            artifact_dir = "/tmp/x"
+            [vm]
+            kernel_src = "/tmp/k"
+            guest_rootfs = "/tmp/r"
+            vfio_device = "none"
+            [measurement]
+            mode = "game"
+            game_benchmark = "vkmark"
+            [agents]
+        "#;
+        let config: CrucibleConfig = toml::from_str(toml_str).unwrap();
+        let ctx = measurement_context(&config, "comparison", "vkmark");
+        assert_eq!(ctx["workload_kind"], "game");
+        assert_eq!(ctx["game_benchmark"], "vkmark");
+        assert_eq!(ctx["mangohud_output"], GUEST_MANGOHUD_OUTPUT);
+        assert_eq!(ctx["phase"], "comparison");
     }
 
     #[test]
