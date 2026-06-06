@@ -104,6 +104,14 @@ pub enum GuestCommand {
         args: Vec<String>,
         duration_secs: u32,
     },
+    /// Run a native GPU benchmark (vkmark/glmark2) under MangoHud, writing
+    /// the frame-time CSV to `mangohud_output` inside the guest. The host
+    /// profiler retrieves it afterwards via `FetchFile`.
+    LaunchBenchmark {
+        name: String,
+        args: Vec<String>,
+        mangohud_output: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -218,6 +226,32 @@ mod tests {
             assert_eq!(name, "stress-ng");
             assert_eq!(args, vec!["--cpu", "4"]);
             assert_eq!(duration_secs, 30);
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn guest_command_launch_benchmark_roundtrip() {
+        let cmd = GuestCommand::LaunchBenchmark {
+            name: "vkmark".to_string(),
+            args: vec!["--size".to_string(), "1920x1080".to_string()],
+            mangohud_output: "/tmp/crucible_mangohud.csv".to_string(),
+        };
+        let json = serde_json::to_value(&cmd).unwrap();
+        assert_eq!(json["cmd"], "launch_benchmark");
+        assert_eq!(json["name"], "vkmark");
+        assert_eq!(json["mangohud_output"], "/tmp/crucible_mangohud.csv");
+        let parsed: GuestCommand = serde_json::from_value(json).unwrap();
+        if let GuestCommand::LaunchBenchmark {
+            name,
+            args,
+            mangohud_output,
+        } = parsed
+        {
+            assert_eq!(name, "vkmark");
+            assert_eq!(args, vec!["--size", "1920x1080"]);
+            assert_eq!(mangohud_output, "/tmp/crucible_mangohud.csv");
         } else {
             panic!("wrong variant");
         }

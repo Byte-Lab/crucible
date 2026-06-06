@@ -20,6 +20,7 @@ class GuestCommand:
     path: str | None = None
     name: str | None = None
     duration_secs: int | None = None
+    mangohud_output: str | None = None
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any]) -> "GuestCommand":

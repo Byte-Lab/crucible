@@ -28,6 +28,14 @@ _BOOT_TIME: float = time.monotonic()
 # (base64 inflates ~33%; 8 MiB raw stays well under any framing concern).
 FETCH_FILE_MAX_BYTES = 8 * 1024 * 1024
 
+# Native GPU benchmarks the guest may launch. Kept to an allow-list so the
+# host can't be tricked into executing arbitrary binaries via the RPC.
+NATIVE_BENCHMARKS = ("vkmark", "glmark2")
+
+# Wall-clock ceiling for a native benchmark run. vkmark's default scene set
+# finishes in a couple of minutes; anything past this is hung.
+LAUNCH_BENCHMARK_TIMEOUT_SECS = 600
+
 
 # ---------------------------------------------------------------------------
 # Wire protocol helpers
@@ -277,6 +285,81 @@ class GuestAgentHandler:
             "psi_pre": psi_pre,
             "psi_post": psi_post,
             "raw_stderr_tail": stderr_tail,
+        })
+
+    def _handle_launch_benchmark(self, cmd: GuestCommand) -> GuestResponse:
+        name = cmd.name or ""
+        if name not in NATIVE_BENCHMARKS:
+            return GuestResponse.error(
+                f"unsupported benchmark: {name!r} (allowed: {', '.join(NATIVE_BENCHMARKS)})"
+            )
+        if not cmd.mangohud_output:
+            return GuestResponse.error("mangohud_output is required")
+
+        output_path = Path(cmd.mangohud_output)
+        output_dir = output_path.parent
+        try:
+            output_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return GuestResponse.error(f"cannot create output dir: {exc}")
+
+        # MangoHud has no fixed-output-file option: it writes
+        # <app>_<timestamp>.csv into output_folder. Snapshot the folder
+        # before the run so we can identify the new log and rename it to
+        # the deterministic path the host asked for.
+        pre_existing = set(output_dir.glob("*.csv"))
+
+        env = os.environ.copy()
+        env.update({
+            "MANGOHUD": "1",
+            "MANGOHUD_CONFIG": (
+                f"output_folder={output_dir},autostart_log=1,log_duration=0,no_display"
+            ),
+        })
+
+        psi_pre = _read_system_psi_avg10()
+        try:
+            proc = subprocess.run(
+                [name, *(cmd.args or [])],
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=LAUNCH_BENCHMARK_TIMEOUT_SECS,
+            )
+        except FileNotFoundError:
+            return GuestResponse.error(f"{name} binary not found")
+        except subprocess.TimeoutExpired:
+            return GuestResponse.error(
+                f"{name} exceeded wall clock timeout of {LAUNCH_BENCHMARK_TIMEOUT_SECS}s"
+            )
+        psi_post = _read_system_psi_avg10()
+
+        new_logs = sorted(
+            set(output_dir.glob("*.csv")) - pre_existing,
+            key=lambda p: p.stat().st_mtime,
+        )
+        log_found = bool(new_logs)
+        if log_found:
+            try:
+                new_logs[-1].rename(output_path)
+            except OSError as exc:
+                return GuestResponse.error(f"cannot move MangoHud log: {exc}")
+
+        def delta(resource: str) -> float:
+            before = psi_pre.get(resource, 0.0)
+            after = psi_post.get(resource, 0.0)
+            return max(0.0, after - before)
+
+        return GuestResponse.ok({
+            "name": name,
+            "exit_code": proc.returncode,
+            "mangohud_output": str(output_path),
+            "log_found": log_found,
+            "psi_cpu_delta": delta("cpu"),
+            "psi_memory_delta": delta("memory"),
+            "psi_io_delta": delta("io"),
+            "stdout_tail": "\n".join((proc.stdout or "").splitlines()[-20:]),
+            "stderr_tail": "\n".join((proc.stderr or "").splitlines()[-20:]),
         })
 
 
