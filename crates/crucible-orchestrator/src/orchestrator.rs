@@ -223,6 +223,10 @@ impl Orchestrator {
             return Ok(());
         }
 
+        // A GPU not bound to vfio-pci hangs the QEMU boot with no useful
+        // diagnostic — fail fast before spawning. No-op without passthrough.
+        self.vm_manager.validate_passthrough()?;
+
         let kernel_str = kernel_path.to_string_lossy().to_string();
         self.vm_manager.boot(&kernel_str).await?;
         let timeout = Duration::from_secs(self.config.vm.boot_timeout_secs);

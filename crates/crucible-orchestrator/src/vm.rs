@@ -84,6 +84,49 @@ impl VmManager {
         &self.config.kernel_src
     }
 
+    /// Fail fast if a configured VFIO device is not actually bound to
+    /// vfio-pci. A GPU still bound to amdgpu (or absent) hangs the QEMU
+    /// boot with no useful diagnostic, so we check sysfs before spawning.
+    /// No-op when passthrough is disabled (`vfio_device` empty or "none").
+    pub fn validate_passthrough(&self) -> Result<()> {
+        Self::validate_passthrough_with(&self.config.vfio_device, |addr| {
+            std::fs::read_link(format!("/sys/bus/pci/devices/{addr}/driver"))
+                .ok()
+                .and_then(|p| p.file_name().map(|s| s.to_string_lossy().into_owned()))
+        })
+    }
+
+    /// Testable core of `validate_passthrough`: `read_driver` maps a full
+    /// PCI address (e.g. "0000:0a:00.0") to the bound driver name, or None
+    /// when no driver is bound / the device doesn't exist.
+    fn validate_passthrough_with(
+        vfio_device: &str,
+        read_driver: impl Fn(&str) -> Option<String>,
+    ) -> Result<()> {
+        let dev = vfio_device.trim();
+        if dev.is_empty() || dev.eq_ignore_ascii_case("none") {
+            return Ok(());
+        }
+        // Config uses the short "0a:00.0" form (matching qemu's vfio-pci
+        // host=); sysfs wants the domain-qualified form.
+        let addr = if dev.matches(':').count() == 1 {
+            format!("0000:{dev}")
+        } else {
+            dev.to_string()
+        };
+        match read_driver(&addr) {
+            Some(driver) if driver == "vfio-pci" => Ok(()),
+            Some(driver) => anyhow::bail!(
+                "vfio device {addr} is bound to '{driver}', not vfio-pci; \
+                 run scripts/setup-host.sh to bind it before booting"
+            ),
+            None => anyhow::bail!(
+                "vfio device {addr} has no driver bound (or does not exist); \
+                 run scripts/setup-host.sh and check the PCI address"
+            ),
+        }
+    }
+
     pub async fn boot(&mut self, kernel_path: &str) -> Result<()> {
         if self.state != VmState::Stopped {
             anyhow::bail!("VM is not stopped (current state: {:?})", self.state);
@@ -243,5 +286,45 @@ mod tests {
         let cmd = manager.build_boot_command("/path/to/bzImage");
         let joined = cmd.join(" ");
         assert!(!joined.contains("vfio-pci"), "joined cmd: {}", joined);
+    }
+
+    #[test]
+    fn validate_passthrough_noop_when_disabled() {
+        for dev in ["", "none", "None", "  "] {
+            let called = std::cell::Cell::new(false);
+            let result = VmManager::validate_passthrough_with(dev, |_| {
+                called.set(true);
+                None
+            });
+            assert!(result.is_ok(), "dev {dev:?} should skip validation");
+            assert!(!called.get(), "dev {dev:?} should not read sysfs");
+        }
+    }
+
+    #[test]
+    fn validate_passthrough_accepts_vfio_pci_binding() {
+        let result = VmManager::validate_passthrough_with("0a:00.0", |addr| {
+            assert_eq!(addr, "0000:0a:00.0"); // short form gets domain-qualified
+            Some("vfio-pci".to_string())
+        });
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn validate_passthrough_rejects_wrong_driver() {
+        let result = VmManager::validate_passthrough_with("0000:0a:00.0", |addr| {
+            assert_eq!(addr, "0000:0a:00.0"); // full form passes through
+            Some("amdgpu".to_string())
+        });
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("amdgpu"), "err: {err}");
+        assert!(err.contains("setup-host.sh"), "err: {err}");
+    }
+
+    #[test]
+    fn validate_passthrough_rejects_unbound_device() {
+        let result = VmManager::validate_passthrough_with("0a:00.0", |_| None);
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("no driver bound"), "err: {err}");
     }
 }
