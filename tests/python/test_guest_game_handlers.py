@@ -150,6 +150,16 @@ def test_launch_benchmark_missing_binary(handler, monkeypatch):
     assert "not found" in resp.message.lower()
 
 
+def test_launch_benchmark_rejects_output_outside_allowed_prefixes(handler):
+    # Write-side counterpart of the fetch_file guard: mangohud_output is
+    # mkdir'd and rename-targeted, so an unrestricted path means arbitrary
+    # file write in the guest.
+    for path in ("/etc/cron.d/mh.csv", "/tmp/../etc/mh.csv", "/root/mh.csv"):
+        resp = handler.handle(_launch_cmd(mangohud_output=path))
+        assert resp.status == "error", f"{path} should be rejected"
+        assert "not allowed" in resp.message.lower(), f"{path}: {resp.message}"
+
+
 def test_launch_benchmark_rejects_comma_in_output_path(handler):
     # MANGOHUD_CONFIG is comma-separated; a comma in the folder would
     # silently corrupt the config string.

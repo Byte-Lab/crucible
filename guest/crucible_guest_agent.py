@@ -308,7 +308,18 @@ class GuestAgentHandler:
         if not cmd.mangohud_output:
             return GuestResponse.error("mangohud_output is required")
 
-        output_path = Path(cmd.mangohud_output)
+        # Write-side counterpart of the fetch_file read guard: this path is
+        # mkdir'd and rename-targeted, so an unrestricted value is an
+        # arbitrary file write. Resolve symlinks/.. before checking.
+        resolved_output = os.path.realpath(cmd.mangohud_output)
+        if not any(
+            resolved_output.startswith(p) for p in FETCH_FILE_ALLOWED_PREFIXES
+        ):
+            return GuestResponse.error(
+                f"mangohud_output not allowed: {cmd.mangohud_output} "
+                f"(allowed prefixes: {', '.join(FETCH_FILE_ALLOWED_PREFIXES)})"
+            )
+        output_path = Path(resolved_output)
         output_dir = output_path.parent
         # MANGOHUD_CONFIG is comma-separated; a comma in the folder path
         # would silently corrupt the whole config string.
