@@ -370,6 +370,9 @@ impl Orchestrator {
 
         let game_context = serde_json::json!({
             "action": "select_game",
+            // Lets the selector pivot to native OSS benchmarks (vkmark/
+            // glmark2) when game mode runs on a rootfs with no Steam library.
+            "workload_kind": self.config.measurement.mode,
         });
         let game_result = self.run_agent(AgentName::GameSelector, game_context).await?;
         let game_info = parse_agent_response(&game_result);

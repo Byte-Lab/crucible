@@ -6,6 +6,22 @@ from typing import Any
 
 from agents.common.tool_registry import ToolRegistry
 
+# Native OSS GPU benchmarks runnable without Steam (guest launch_benchmark
+# RPC allow-lists these). Selected when [measurement] mode = "game" on a
+# rootfs with no Steam library.
+NATIVE_BENCHMARKS: dict[str, dict[str, Any]] = {
+    "vkmark": {
+        "benchmark_args": [],
+        "workload_profile": "gpu_heavy",
+        "api": "vulkan",
+    },
+    "glmark2": {
+        "benchmark_args": [],
+        "workload_profile": "gpu_heavy",
+        "api": "opengl",
+    },
+}
+
 BENCHMARK_GAMES: dict[int, dict[str, Any]] = {
     750920: {
         "name": "Shadow of the Tomb Raider",
@@ -76,6 +92,17 @@ def make_game_selector_tools(registry: ToolRegistry) -> None:
         if not games:
             return {"games": [], "searched_paths": searched, "error": "no games found"}
         return {"games": games, "count": len(games)}
+
+    @registry.tool(description=(
+        "List native OSS GPU benchmarks (vkmark, glmark2) runnable in the "
+        "guest without Steam. Use these when no Steam library is available."
+    ))
+    def list_native_benchmarks() -> dict:
+        return {
+            "benchmarks": [
+                {"name": name, **info} for name, info in NATIVE_BENCHMARKS.items()
+            ]
+        }
 
     @registry.tool(description="Check whether a game has a known built-in benchmark mode.")
     def check_benchmark_support(app_id: int) -> dict:

@@ -18,6 +18,15 @@ Respond with JSON: {"app_id": <int>, "name": "<str>", "benchmark_method": "built
         msg = f"Select the next game to benchmark.\nGoals: {goals}\n"
         if history:
             msg += f"Recent history: {history}\n"
+        if context.get("workload_kind") == "game":
+            msg += (
+                "The guest rootfs has no Steam library. Call "
+                "list_native_benchmarks and select one of the native GPU "
+                "benchmarks instead. Respond with app_id 0, the benchmark "
+                'binary name as "name", benchmark_method "builtin", and its '
+                "benchmark_args."
+            )
+            return msg
         msg += "Use tools to find installed games and check benchmark support."
         return msg
 
