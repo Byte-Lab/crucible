@@ -32,10 +32,10 @@ FETCH_FILE_MAX_BYTES = 8 * 1024 * 1024
 # host can't be tricked into executing arbitrary binaries via the RPC.
 NATIVE_BENCHMARKS = ("vkmark", "glmark2")
 
-# fetch_file may only read under these prefixes. The Claude tool loop
-# controls the requested path; without a guard it could exfiltrate
-# arbitrary guest files (e.g. /etc/shadow) over vsock.
-FETCH_FILE_ALLOWED_PREFIXES = ("/tmp/", "/var/log/crucible/")
+# fetch_file reads and launch_benchmark writes are confined to these
+# prefixes. The Claude tool loop controls the paths; without a guard it
+# could exfiltrate or overwrite arbitrary guest files over vsock.
+GUEST_FILE_ALLOWED_PREFIXES = ("/tmp/", "/var/log/crucible/")
 
 # Wall-clock ceiling for a native benchmark run. vkmark's default scene set
 # finishes in a couple of minutes; anything past this is hung.
@@ -218,10 +218,10 @@ class GuestAgentHandler:
             return GuestResponse.error("path is required")
         # Resolve symlinks/.. first so traversal can't escape the allow-list.
         resolved = os.path.realpath(file_path)
-        if not any(resolved.startswith(p) for p in FETCH_FILE_ALLOWED_PREFIXES):
+        if not any(resolved.startswith(p) for p in GUEST_FILE_ALLOWED_PREFIXES):
             return GuestResponse.error(
                 f"path not allowed: {file_path} (allowed prefixes: "
-                f"{', '.join(FETCH_FILE_ALLOWED_PREFIXES)})"
+                f"{', '.join(GUEST_FILE_ALLOWED_PREFIXES)})"
             )
         p = Path(resolved)
         if not p.exists():
@@ -313,11 +313,11 @@ class GuestAgentHandler:
         # arbitrary file write. Resolve symlinks/.. before checking.
         resolved_output = os.path.realpath(cmd.mangohud_output)
         if not any(
-            resolved_output.startswith(p) for p in FETCH_FILE_ALLOWED_PREFIXES
+            resolved_output.startswith(p) for p in GUEST_FILE_ALLOWED_PREFIXES
         ):
             return GuestResponse.error(
                 f"mangohud_output not allowed: {cmd.mangohud_output} "
-                f"(allowed prefixes: {', '.join(FETCH_FILE_ALLOWED_PREFIXES)})"
+                f"(allowed prefixes: {', '.join(GUEST_FILE_ALLOWED_PREFIXES)})"
             )
         output_path = Path(resolved_output)
         output_dir = output_path.parent
