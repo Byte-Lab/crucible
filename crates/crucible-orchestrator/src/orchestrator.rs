@@ -78,13 +78,17 @@ pub fn measurement_context(
         "game": game_name,
         "runs": config.measurement.runs_per_phase,
         "workload_kind": config.measurement.mode,
-        "benchmark_args": config.measurement.benchmark_args,
-        "duration_secs": config.measurement.benchmark_duration_secs,
         "vsock_cid": config.vm.vsock_cid,
     });
     if config.measurement.mode == "game" {
+        // benchmark_args/duration_secs are stress-ng knobs — leaking them
+        // here would put `--cpu 2` on the vkmark command line.
         context["game_benchmark"] = serde_json::json!(config.measurement.game_benchmark);
         context["mangohud_output"] = serde_json::json!(GUEST_MANGOHUD_OUTPUT);
+    } else {
+        context["benchmark_args"] = serde_json::json!(config.measurement.benchmark_args);
+        context["duration_secs"] =
+            serde_json::json!(config.measurement.benchmark_duration_secs);
     }
     context
 }
@@ -1026,6 +1030,9 @@ mod tests {
         assert_eq!(ctx["game_benchmark"], "vkmark");
         assert_eq!(ctx["mangohud_output"], GUEST_MANGOHUD_OUTPUT);
         assert_eq!(ctx["phase"], "comparison");
+        // stress-ng flags must not leak into the vkmark/glmark2 invocation.
+        assert!(ctx.get("benchmark_args").is_none());
+        assert!(ctx.get("duration_secs").is_none());
     }
 
     #[test]

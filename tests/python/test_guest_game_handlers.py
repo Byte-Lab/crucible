@@ -68,8 +68,17 @@ def test_fetch_file_oversize_is_truncated(handler, monkeypatch):
 
 
 def test_fetch_file_missing_path_still_errors(handler):
-    resp = handler.handle(GuestCommand(cmd="fetch_file", path="/nonexistent/file.csv"))
+    resp = handler.handle(GuestCommand(cmd="fetch_file", path="/tmp/nonexistent-file.csv"))
     assert resp.status == "error"
+
+
+def test_fetch_file_rejects_paths_outside_allowed_prefixes(handler):
+    # The Claude tool loop controls log_path; don't let it exfiltrate
+    # arbitrary guest files.
+    for path in ("/etc/shadow", "/root/.ssh/id_rsa", "/tmp/../etc/passwd"):
+        resp = handler.handle(GuestCommand(cmd="fetch_file", path=path))
+        assert resp.status == "error", f"{path} should be rejected"
+        assert "not allowed" in resp.message.lower(), f"{path}: {resp.message}"
 
 
 # ---------------------------------------------------------------------------
@@ -139,6 +148,13 @@ def test_launch_benchmark_missing_binary(handler, monkeypatch):
     resp = handler.handle(_launch_cmd(name="glmark2"))
     assert resp.status == "error"
     assert "not found" in resp.message.lower()
+
+
+def test_launch_benchmark_rejects_comma_in_output_path(handler):
+    # MANGOHUD_CONFIG is comma-separated; a comma in the folder would
+    # silently corrupt the config string.
+    resp = handler.handle(_launch_cmd(mangohud_output="/tmp/foo,bar/mh.csv"))
+    assert resp.status == "error"
 
 
 def test_launch_benchmark_reports_psi_deltas(handler, monkeypatch):

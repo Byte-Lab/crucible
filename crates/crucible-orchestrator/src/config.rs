@@ -113,12 +113,33 @@ pub struct GamePlayerConfig {
     pub enabled: bool,
 }
 
+/// Benchmarks the guest agent's launch_benchmark RPC allow-lists. Kept in
+/// sync with NATIVE_BENCHMARKS in guest/crucible_guest_agent.py.
+const VALID_GAME_BENCHMARKS: &[&str] = &["vkmark", "glmark2"];
+
 impl CrucibleConfig {
     pub fn from_file(path: &Path) -> Result<Self> {
         let content = std::fs::read_to_string(path)
             .with_context(|| format!("failed to read config: {}", path.display()))?;
-        toml::from_str(&content)
-            .with_context(|| format!("failed to parse config: {}", path.display()))
+        let config: Self = toml::from_str(&content)
+            .with_context(|| format!("failed to parse config: {}", path.display()))?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    /// Fail at startup on settings that would otherwise burn a full cycle
+    /// before erroring inside the guest.
+    pub fn validate(&self) -> Result<()> {
+        if self.measurement.mode == "game"
+            && !VALID_GAME_BENCHMARKS.contains(&self.measurement.game_benchmark.as_str())
+        {
+            anyhow::bail!(
+                "[measurement] game_benchmark = {:?} is not supported (allowed: {})",
+                self.measurement.game_benchmark,
+                VALID_GAME_BENCHMARKS.join(", ")
+            );
+        }
+        Ok(())
     }
 }
 
@@ -298,6 +319,32 @@ mod tests {
         "#;
         let config: CrucibleConfig = toml::from_str(toml_str).unwrap();
         assert_eq!(config.measurement.game_benchmark, "glmark2");
+        assert!(config.validate().is_ok());
+    }
+
+    #[test]
+    fn validate_rejects_unknown_game_benchmark_in_game_mode() {
+        let toml_str = r#"
+            [orchestrator]
+            db_path = "/tmp/x.db"
+            artifact_dir = "/tmp/x"
+            [vm]
+            kernel_src = "/tmp/k"
+            guest_rootfs = "/tmp/r"
+            vfio_device = "none"
+            [measurement]
+            mode = "game"
+            game_benchmark = "glmark2-drm"
+            [agents]
+        "#;
+        let config: CrucibleConfig = toml::from_str(toml_str).unwrap();
+        let err = config.validate().unwrap_err().to_string();
+        assert!(err.contains("glmark2-drm"), "err: {err}");
+
+        // Synthetic mode doesn't care about game_benchmark.
+        let synthetic = toml_str.replace("mode = \"game\"", "mode = \"synthetic\"");
+        let config: CrucibleConfig = toml::from_str(&synthetic).unwrap();
+        assert!(config.validate().is_ok());
     }
 
     #[test]

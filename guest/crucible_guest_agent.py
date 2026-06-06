@@ -32,6 +32,11 @@ FETCH_FILE_MAX_BYTES = 8 * 1024 * 1024
 # host can't be tricked into executing arbitrary binaries via the RPC.
 NATIVE_BENCHMARKS = ("vkmark", "glmark2")
 
+# fetch_file may only read under these prefixes. The Claude tool loop
+# controls the requested path; without a guard it could exfiltrate
+# arbitrary guest files (e.g. /etc/shadow) over vsock.
+FETCH_FILE_ALLOWED_PREFIXES = ("/tmp/", "/var/log/crucible/")
+
 # Wall-clock ceiling for a native benchmark run. vkmark's default scene set
 # finishes in a couple of minutes; anything past this is hung.
 LAUNCH_BENCHMARK_TIMEOUT_SECS = 600
@@ -211,7 +216,14 @@ class GuestAgentHandler:
         file_path = cmd.path
         if file_path is None:
             return GuestResponse.error("path is required")
-        p = Path(file_path)
+        # Resolve symlinks/.. first so traversal can't escape the allow-list.
+        resolved = os.path.realpath(file_path)
+        if not any(resolved.startswith(p) for p in FETCH_FILE_ALLOWED_PREFIXES):
+            return GuestResponse.error(
+                f"path not allowed: {file_path} (allowed prefixes: "
+                f"{', '.join(FETCH_FILE_ALLOWED_PREFIXES)})"
+            )
+        p = Path(resolved)
         if not p.exists():
             return GuestResponse.error(f"file not found: {file_path}")
         try:
@@ -298,6 +310,12 @@ class GuestAgentHandler:
 
         output_path = Path(cmd.mangohud_output)
         output_dir = output_path.parent
+        # MANGOHUD_CONFIG is comma-separated; a comma in the folder path
+        # would silently corrupt the whole config string.
+        if "," in str(output_dir):
+            return GuestResponse.error(
+                f"mangohud_output dir must not contain a comma: {output_dir}"
+            )
         try:
             output_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:

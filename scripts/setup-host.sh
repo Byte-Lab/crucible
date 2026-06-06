@@ -46,6 +46,11 @@ if [[ "$ADDR" != *:*:* ]]; then
     ADDR="0000:$ADDR"
 fi
 
+if [[ ! "$ADDR" =~ ^[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]$ ]]; then
+    echo "[setup-host] invalid PCI address: $ADDR (expected e.g. 0a:00.0)" >&2
+    exit 2
+fi
+
 DEV="/sys/bus/pci/devices/$ADDR"
 
 fail=0

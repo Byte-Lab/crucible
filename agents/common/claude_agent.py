@@ -72,7 +72,15 @@ class ClaudeAgentBase(AgentBase):
         # a vsock CID through context. Tests construct TaskEnvelope without
         # this key, in which case tools fall back to dry-run behavior.
         cid = task.context.get("vsock_cid")
-        self._guest_rpc = GuestRpc(int(cid)) if isinstance(cid, int) else None
+        # The RPC socket timeout must outlive the longest guest-side call:
+        # launch_benchmark blocks for the whole vkmark/glmark2 run (up to
+        # 600s) and run_benchmark for duration+30s. The default 30s socket
+        # timeout would kill both, so track the agent-level timeout instead.
+        self._guest_rpc = (
+            GuestRpc(int(cid), timeout_secs=float(task.config.timeout_seconds))
+            if isinstance(cid, int)
+            else None
+        )
         self.setup_tools(registry)
         return asyncio.run(self._run(task, registry))
 

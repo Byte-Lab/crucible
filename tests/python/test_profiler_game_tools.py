@@ -115,7 +115,8 @@ def test_profiler_game_user_message_instructs_launch_benchmark():
             "game": "vkmark",
             "workload_kind": "game",
             "game_benchmark": "vkmark",
-            "benchmark_args": ["--size", "1920x1080"],
+            # No benchmark_args: those are stress-ng knobs and the
+            # orchestrator deliberately omits them in game mode.
             "mangohud_output": "/tmp/crucible_mangohud.csv",
         },
         config=AgentConfig(model="m", max_tokens=1, timeout_seconds=1),
