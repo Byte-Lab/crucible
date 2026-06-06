@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import io
+import math
 import os
 from typing import Any
 
@@ -9,8 +10,20 @@ from agents.common.tool_registry import ToolRegistry
 
 
 def parse_mangohud_csv(csv_text: str) -> dict[str, Any]:
-    """Parse MangoHud CSV output and compute frame statistics."""
-    reader = csv.DictReader(io.StringIO(csv_text))
+    """Parse MangoHud CSV output and compute frame statistics.
+
+    Real MangoHud logs open with two system-info rows (os/cpu/gpu/... header
+    plus its values) before the per-frame ``fps,frametime,...`` header.
+    Skip ahead to the frame header so DictReader keys off the right row.
+    """
+    lines = csv_text.splitlines()
+    start = 0
+    for i, line in enumerate(lines):
+        first_field = line.split(",", 1)[0].strip().lower()
+        if first_field in ("fps", "frametime"):
+            start = i
+            break
+    reader = csv.DictReader(io.StringIO("\n".join(lines[start:])))
     fps_values: list[float] = []
     frametime_values: list[float] = []
 
@@ -39,7 +52,10 @@ def parse_mangohud_csv(csv_text: str) -> dict[str, Any]:
     count = len(fps_sorted)
 
     def percentile(data: list[float], p: float) -> float:
-        idx = max(0, int(len(data) * p / 100.0) - 1)
+        # Nearest-rank: ceil(p/100 * n) - 1. The previous floor-based index
+        # underestimated high percentiles on small samples (p99 of 4 frames
+        # returned the 2nd-worst frame, hiding the stutter spike).
+        idx = max(0, math.ceil(len(data) * p / 100.0) - 1)
         return data[idx]
 
     return {
@@ -73,6 +89,9 @@ def _parse_psi_file(path: str) -> dict[str, float] | None:
 
 def make_profiler_tools(registry: ToolRegistry, guest_rpc: Any) -> None:
     """Register profiler tools into the given registry."""
+    from agents.profiler.game_tools import make_profiler_game_tools
+
+    make_profiler_game_tools(registry, guest_rpc)
 
     @registry.tool(description="Start profiling with Perfetto trace collection.")
     def start_profiling(perfetto_config: str = "", duration_secs: int = 30) -> dict:

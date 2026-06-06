@@ -37,6 +37,32 @@ Respond with JSON: {"fps_avg": <float>, "fps_p1": <float>, "frame_time_p99_ms": 
                 msg = f"Hypothesis: {hypothesis}\n" + msg
             return msg
 
+        benchmark = context.get("game_benchmark")
+        if benchmark:
+            args = context.get("benchmark_args", [])
+            mangohud_output = context.get(
+                "mangohud_output", "/tmp/crucible_mangohud.csv"
+            )
+            msg = (
+                f"Collect {phase} measurements via the native GPU benchmark.\n"
+                f"1. Call launch_benchmark(name={benchmark!r}, args={args!r}, "
+                f"mangohud_output={mangohud_output!r}) exactly once.\n"
+                f"2. Call fetch_mangohud_log(log_path={mangohud_output!r}) to "
+                "retrieve frame statistics.\n"
+                "Then emit the final JSON object from the system prompt with:\n"
+                "  fps_avg = fps_avg from fetch_mangohud_log\n"
+                "  fps_p1 = fps_p1 from fetch_mangohud_log\n"
+                "  frame_time_p99_ms = frametime_p99_ms from fetch_mangohud_log\n"
+                "  psi_cpu_avg = psi_cpu_delta from the launch_benchmark result\n"
+                "  psi_memory_avg = psi_memory_delta from the launch_benchmark "
+                "result\n"
+                "Set collection_paths to "
+                f'{{"mangohud": {mangohud_output!r}}}.'
+            )
+            if hypothesis:
+                msg = f"Hypothesis: {hypothesis}\n" + msg
+            return msg
+
         msg = f"Collect {phase} measurements for {game}.\n"
         if hypothesis:
             msg += f"Hypothesis: {hypothesis}\nConfigure profiling relevant to this.\n"
