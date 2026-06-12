@@ -81,10 +81,14 @@ pub fn measurement_context(
         "vsock_cid": config.vm.vsock_cid,
     });
     if config.measurement.mode == "game" {
-        // benchmark_args/duration_secs are stress-ng knobs — leaking them
-        // here would put `--cpu 2` on the vkmark command line.
+        // benchmark_args are stress-ng knobs — leaking them here would put
+        // `--cpu 2` on the vkmark command line. duration_secs is shared:
+        // the profiler sizes both the benchmark scene duration and
+        // MangoHud's log window from it.
         context["game_benchmark"] = serde_json::json!(config.measurement.game_benchmark);
         context["mangohud_output"] = serde_json::json!(GUEST_MANGOHUD_OUTPUT);
+        context["duration_secs"] =
+            serde_json::json!(config.measurement.benchmark_duration_secs);
     } else {
         context["benchmark_args"] = serde_json::json!(config.measurement.benchmark_args);
         context["duration_secs"] =
@@ -1030,9 +1034,14 @@ mod tests {
         assert_eq!(ctx["game_benchmark"], "vkmark");
         assert_eq!(ctx["mangohud_output"], GUEST_MANGOHUD_OUTPUT);
         assert_eq!(ctx["phase"], "comparison");
-        // stress-ng flags must not leak into the vkmark/glmark2 invocation.
+        // stress-ng flags must not leak into the vkmark/glmark2 invocation,
+        // but duration_secs is shared — it sizes the benchmark run and
+        // MangoHud's finite log window.
         assert!(ctx.get("benchmark_args").is_none());
-        assert!(ctx.get("duration_secs").is_none());
+        assert_eq!(
+            ctx["duration_secs"],
+            serde_json::json!(config.measurement.benchmark_duration_secs)
+        );
     }
 
     #[test]
