@@ -116,6 +116,16 @@ pub enum GuestCommand {
         /// CSV is never flushed).
         duration_secs: u32,
     },
+    /// Run a Steam title under weston-headless + MangoHud (milestone G3).
+    /// `args` are extra launch options (e.g. Source 2 timedemo flags);
+    /// frame data flows through the same mangohud_output → FetchFile path
+    /// as LaunchBenchmark.
+    LaunchSteamBenchmark {
+        app_id: u32,
+        args: Vec<String>,
+        mangohud_output: String,
+        duration_secs: u32,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -260,6 +270,27 @@ mod tests {
             assert_eq!(args, vec!["--size", "1920x1080"]);
             assert_eq!(mangohud_output, "/tmp/crucible_mangohud.csv");
             assert_eq!(duration_secs, 15);
+        } else {
+            panic!("wrong variant");
+        }
+    }
+
+    #[test]
+    fn guest_command_launch_steam_benchmark_roundtrip() {
+        let cmd = GuestCommand::LaunchSteamBenchmark {
+            app_id: 570,
+            args: vec!["+timedemo".to_string(), "bench".to_string()],
+            mangohud_output: "/tmp/crucible_mangohud.csv".to_string(),
+            duration_secs: 90,
+        };
+        let json = serde_json::to_value(&cmd).unwrap();
+        assert_eq!(json["cmd"], "launch_steam_benchmark");
+        assert_eq!(json["app_id"], 570);
+        assert_eq!(json["duration_secs"], 90);
+        let parsed: GuestCommand = serde_json::from_value(json).unwrap();
+        if let GuestCommand::LaunchSteamBenchmark { app_id, args, .. } = parsed {
+            assert_eq!(app_id, 570);
+            assert_eq!(args, vec!["+timedemo", "bench"]);
         } else {
             panic!("wrong variant");
         }
