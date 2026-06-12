@@ -119,6 +119,15 @@ impl AgentRunner {
                 )
             })?;
 
+        // Persist the full envelope next to the stderr artifact: when a
+        // cycle produces wrong-but-parseable data (fps_avg=0 from a live
+        // GPU), the stderr tool-name mirror alone can't show what the
+        // agent actually returned or logged.
+        let result_path = agents_artifact_dir.join(format!("{}.result.json", task.task_id));
+        if let Err(err) = tokio::fs::write(&result_path, &output.stdout).await {
+            tracing::warn!(path = %result_path.display(), %err, "failed to persist agent result");
+        }
+
         Ok(result)
     }
 }
