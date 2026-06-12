@@ -72,24 +72,34 @@ else
     fail=1
 fi
 
-# --- Precheck 3: IOMMU group members --------------------------------------
-# Every function in the GPU's IOMMU group (typically the GPU plus its HDMI
-# audio function) must be bound to vfio-pci or unbound for passthrough.
+# --- Precheck 3: slot siblings + IOMMU group members ----------------------
+# A modern GPU is a multifunction device (e.g. a 7900 XT is VGA + HDMI
+# audio + USB + UCSI, each in its own IOMMU group). QEMU's bus reset at
+# attach affects every function, so ALL of them must move to vfio-pci —
+# passing only the VGA function fails with "depends on group N which is
+# not owned". Collect every function of the slot, then every member of
+# each function's IOMMU group.
+SLOT="${ADDR%.*}"
 GROUP_MEMBERS=()
-if [[ -d "$DEV/iommu_group/devices" ]]; then
-    group_id="$(basename "$(readlink "$DEV/iommu_group")")"
-    echo "[setup-host] IOMMU group $group_id members:"
-    for member in "$DEV/iommu_group/devices"/*; do
-        m="$(basename "$member")"
-        driver="(none)"
-        [[ -L "$member/driver" ]] && driver="$(basename "$(readlink "$member/driver")")"
-        echo "             $m  driver=$driver"
-        GROUP_MEMBERS+=("$m")
-    done
-else
-    echo "[setup-host] WARN: no IOMMU group for $ADDR (expected with IOMMU off)"
-    GROUP_MEMBERS=("$ADDR")
-fi
+for sibling in "/sys/bus/pci/devices/$SLOT".*; do
+    s="$(basename "$sibling")"
+    if [[ -d "$sibling/iommu_group/devices" ]]; then
+        group_id="$(basename "$(readlink "$sibling/iommu_group")")"
+        echo "[setup-host] $s — IOMMU group $group_id members:"
+        for member in "$sibling/iommu_group/devices"/*; do
+            m="$(basename "$member")"
+            driver="(none)"
+            [[ -L "$member/driver" ]] && driver="$(basename "$(readlink "$member/driver")")"
+            echo "             $m  driver=$driver"
+            GROUP_MEMBERS+=("$m")
+        done
+    else
+        echo "[setup-host] WARN: no IOMMU group for $s (expected with IOMMU off)"
+        GROUP_MEMBERS+=("$s")
+    fi
+done
+# De-duplicate (a group can contain a sibling we already walked).
+mapfile -t GROUP_MEMBERS < <(printf '%s\n' "${GROUP_MEMBERS[@]}" | sort -u)
 
 # --- Current driver --------------------------------------------------------
 current="(none)"
@@ -147,4 +157,19 @@ for m in "${GROUP_MEMBERS[@]}"; do
         && bound="$(basename "$(readlink "/sys/bus/pci/devices/$m/driver")")"
     echo "[setup-host] $m now bound to: $bound"
 done
+
+# The orchestrator runs QEMU unprivileged: it needs to open each affected
+# /dev/vfio/<group> node, and enough RLIMIT_MEMLOCK to pin all guest RAM
+# for the IOMMU mappings.
+run_user="${SUDO_USER:-$(id -un)}"
+for m in "${GROUP_MEMBERS[@]}"; do
+    g="$(basename "$(readlink "/sys/bus/pci/devices/$m/iommu_group" 2>/dev/null)")" || continue
+    [[ -n "$g" && -e "/dev/vfio/$g" ]] || continue
+    sudo chown "$run_user" "/dev/vfio/$g"
+    echo "[setup-host] /dev/vfio/$g now owned by $run_user"
+done
 echo "[setup-host] done"
+echo "[setup-host] NOTE: unprivileged QEMU also needs a memlock limit >= guest"
+echo "             RAM. Check with 'ulimit -l'; raise via /etc/security/limits.d/"
+echo "             (e.g. '$run_user hard memlock unlimited' + relogin) or"
+echo "             'sudo prlimit --pid <orchestrator-pid> --memlock=unlimited'."
