@@ -16,19 +16,34 @@ LOWER_IS_BETTER: set[str] = {
 }
 
 
+# The Agent SDK's CLI transport rejects any single JSON message over 1 MiB;
+# one oversized tool result kills the whole agent mid-cycle ("JSON message
+# exceeded maximum buffer size"). Every tool output must stay well under it.
+MAX_TOOL_RESULT_BYTES = 200_000
+MAX_SEARCH_MATCHES = 500
+
+
 def make_analyzer_tools(registry: ToolRegistry) -> None:
     """Register analyzer tools into the given registry."""
 
     @registry.tool(description="Read a file from disk, returning up to max_lines lines.")
     def read_file(path: str, max_lines: int = 500) -> dict:
         try:
+            truncated = False
+            size = 0
             with open(path, "r", encoding="utf-8", errors="replace") as fh:
                 lines = []
                 for i, line in enumerate(fh):
-                    if i >= max_lines:
+                    if i >= max_lines or size >= MAX_TOOL_RESULT_BYTES:
+                        truncated = True
                         break
                     lines.append(line)
-            return {"content": "".join(lines), "lines_read": len(lines)}
+                    size += len(line)
+            return {
+                "content": "".join(lines),
+                "lines_read": len(lines),
+                "truncated": truncated,
+            }
         except OSError as exc:
             return {"error": str(exc)}
 
@@ -44,9 +59,10 @@ def make_analyzer_tools(registry: ToolRegistry) -> None:
                 timeout=30,
             )
             return {
-                "stdout": result.stdout,
-                "stderr": result.stderr,
+                "stdout": result.stdout[:MAX_TOOL_RESULT_BYTES],
+                "stderr": result.stderr[:10_000],
                 "returncode": result.returncode,
+                "truncated": len(result.stdout) > MAX_TOOL_RESULT_BYTES,
             }
         except FileNotFoundError:
             return {"error": "trace_processor_shell not found in PATH"}
@@ -89,7 +105,19 @@ def make_analyzer_tools(registry: ToolRegistry) -> None:
                 timeout=30,
             )
             matches = result.stdout.strip().split("\n") if result.stdout.strip() else []
-            return {"matches": matches, "count": len(matches)}
+            truncated = len(matches) > MAX_SEARCH_MATCHES
+            matches = matches[:MAX_SEARCH_MATCHES]
+            # Per-line cap too: a single minified line can carry megabytes.
+            matches = [m[:500] for m in matches]
+            size = 0
+            capped: list[str] = []
+            for m in matches:
+                if size + len(m) > MAX_TOOL_RESULT_BYTES:
+                    truncated = True
+                    break
+                capped.append(m)
+                size += len(m)
+            return {"matches": capped, "count": len(capped), "truncated": truncated}
         except FileNotFoundError:
             return {"error": "grep not found"}
         except subprocess.TimeoutExpired:

@@ -181,3 +181,22 @@ def test_extract_result_falls_back_on_non_json():
     result = agent.extract_result(text, _task())
     assert result == {"response": text}
     assert "patch_path" not in result
+
+
+def test_search_kernel_source_output_is_capped(tmp_path):
+    # Agent SDK transport rejects single JSON messages over 1 MiB; an
+    # uncapped grep over a kernel tree killed the Analyzer in the first
+    # real-GPU e2e. Optimizer mirrors the analyzer caps.
+    import json
+
+    from agents.common.tool_registry import ToolRegistry
+    from agents.optimizer.tools import make_optimizer_tools
+
+    big = tmp_path / "big.c"
+    big.write_text("needle\n" * 200_000)
+    registry = ToolRegistry()
+    make_optimizer_tools(registry, kernel_src=str(tmp_path))
+    result = registry.call("search_kernel_source", {"pattern": "needle"})
+    assert result["truncated"] is True
+    assert result["count"] <= 500
+    assert len(json.dumps(result)) < 256_000

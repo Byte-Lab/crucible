@@ -5,6 +5,12 @@ import subprocess
 
 from agents.common.tool_registry import ToolRegistry
 
+# The Agent SDK's CLI transport rejects any single JSON message over 1 MiB;
+# one oversized tool result (an uncapped grep over the kernel tree) kills
+# the agent mid-cycle. Mirror of the caps in agents/analyzer/tools.py.
+MAX_TOOL_RESULT_BYTES = 200_000
+MAX_SEARCH_MATCHES = 500
+
 
 def make_optimizer_tools(registry: ToolRegistry, kernel_src: str) -> None:
     """Register optimizer tools into the given registry.
@@ -34,11 +40,17 @@ def make_optimizer_tools(registry: ToolRegistry, kernel_src: str) -> None:
                 lines = fh.readlines()
             end_line = start_line + max_lines
             selected = lines[start_line:end_line]
+            content = "".join(selected)
+            truncated = False
+            if len(content) > MAX_TOOL_RESULT_BYTES:
+                content = content[:MAX_TOOL_RESULT_BYTES]
+                truncated = True
             return {
-                "content": "".join(selected),
+                "content": content,
                 "total_lines": len(lines),
                 "start_line": start_line,
                 "lines_returned": len(selected),
+                "truncated": truncated,
             }
         except OSError as exc:
             return {"error": str(exc)}
@@ -58,7 +70,17 @@ def make_optimizer_tools(registry: ToolRegistry, kernel_src: str) -> None:
             matches = (
                 result.stdout.strip().split("\n") if result.stdout.strip() else []
             )
-            return {"matches": matches, "count": len(matches)}
+            truncated = len(matches) > MAX_SEARCH_MATCHES
+            matches = [m[:500] for m in matches[:MAX_SEARCH_MATCHES]]
+            size = 0
+            capped: list[str] = []
+            for m in matches:
+                if size + len(m) > MAX_TOOL_RESULT_BYTES:
+                    truncated = True
+                    break
+                capped.append(m)
+                size += len(m)
+            return {"matches": capped, "count": len(capped), "truncated": truncated}
         except FileNotFoundError:
             return {"error": "grep not found"}
         except subprocess.TimeoutExpired:

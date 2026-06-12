@@ -71,3 +71,36 @@ def test_analyzer_user_message_omits_previous_attempts_on_first_pass():
     assert "Previous optimization attempts" not in msg
     assert "alternate bottlenecks" not in msg
     assert "attempt 1" in msg
+
+
+def test_search_source_output_is_capped(tmp_path):
+    # The Agent SDK's CLI transport rejects any single JSON message over
+    # 1 MiB; an uncapped grep over a kernel tree blew through it and
+    # killed the Analyzer mid-cycle. Tool results must stay bounded.
+    registry = ToolRegistry()
+    make_analyzer_tools(registry)
+    big = tmp_path / "big.c"
+    big.write_text("needle\n" * 200_000)
+    result = registry.call("search_source", {
+        "directory": str(tmp_path),
+        "pattern": "needle",
+    })
+    assert result["truncated"] is True
+    assert result["count"] <= 500
+    import json
+    assert len(json.dumps(result)) < 256_000
+
+
+def test_read_file_caps_caller_supplied_max_lines(tmp_path):
+    registry = ToolRegistry()
+    make_analyzer_tools(registry)
+    big = tmp_path / "big.txt"
+    big.write_text("x" * 4096 + "\n", encoding="utf-8")
+    big.write_text(("x" * 4096 + "\n") * 10_000, encoding="utf-8")
+    result = registry.call("read_file", {
+        "path": str(big),
+        "max_lines": 10_000,
+    })
+    import json
+    assert len(json.dumps(result)) < 1_000_000
+    assert result["truncated"] is True
