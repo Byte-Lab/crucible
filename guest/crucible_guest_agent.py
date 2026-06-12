@@ -28,9 +28,20 @@ _BOOT_TIME: float = time.monotonic()
 # (base64 inflates ~33%; 8 MiB raw stays well under any framing concern).
 FETCH_FILE_MAX_BYTES = 8 * 1024 * 1024
 
-# Native GPU benchmarks the guest may launch. Kept to an allow-list so the
-# host can't be tricked into executing arbitrary binaries via the RPC.
-NATIVE_BENCHMARKS = ("vkmark", "glmark2")
+# Native GPU benchmarks the guest may launch, mapped to their base argv.
+# Kept to an allow-list so the host can't be tricked into executing
+# arbitrary binaries via the RPC. vkmark must use the headless winsys: its
+# default kms backend presents via raw DRM atomic commits without ever
+# creating a VkSwapchainKHR, so MangoHud's QueuePresentKHR hook never fires
+# and the frame-time CSV stays empty.
+NATIVE_BENCHMARKS = {
+    "vkmark": ["vkmark", "--winsys", "headless"],
+    "glmark2": ["glmark2"],
+}
+
+# Fallback benchmark runtime when the host omits duration_secs; MangoHud's
+# log window is derived from it and must elapse before the app exits.
+DEFAULT_LAUNCH_BENCHMARK_DURATION_SECS = 10
 
 # fetch_file reads and launch_benchmark writes are confined to these
 # prefixes. The Claude tool loop controls the paths; without a guard it
@@ -338,18 +349,25 @@ class GuestAgentHandler:
         # the deterministic path the host asked for.
         pre_existing = set(output_dir.glob("*.csv"))
 
+        # MangoHud only writes the CSV when logging *stops* while the app is
+        # still alive: log_duration=0 never stops, and no_display suppresses
+        # the HUD update loop that feeds the logger — both leave the file
+        # unwritten. Finite window, ends 2s before the benchmark does.
+        duration = cmd.duration_secs or DEFAULT_LAUNCH_BENCHMARK_DURATION_SECS
+        log_duration = max(1, duration - 2)
         env = os.environ.copy()
         env.update({
             "MANGOHUD": "1",
             "MANGOHUD_CONFIG": (
-                f"output_folder={output_dir},autostart_log=1,log_duration=0,no_display"
+                f"output_folder={output_dir},autostart_log=1,"
+                f"log_duration={log_duration},log_interval=100"
             ),
         })
 
         psi_pre = _read_system_psi_avg10()
         try:
             proc = subprocess.run(
-                [name, *(cmd.args or [])],
+                [*NATIVE_BENCHMARKS[name], *(cmd.args or [])],
                 env=env,
                 capture_output=True,
                 text=True,

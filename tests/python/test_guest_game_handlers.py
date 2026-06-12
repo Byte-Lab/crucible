@@ -184,3 +184,89 @@ def test_launch_benchmark_reports_psi_deltas(handler, monkeypatch):
     assert "psi_cpu_delta" in resp.data
     assert "psi_memory_delta" in resp.data
     assert "psi_io_delta" in resp.data
+
+
+def test_launch_benchmark_vkmark_forces_headless_winsys(handler, monkeypatch):
+    # vkmark's default kms winsys presents via raw DRM atomic commits and
+    # never creates a VkSwapchainKHR, so MangoHud's QueuePresentKHR hook
+    # sees zero frames. Only the headless winsys (VK_EXT_headless_surface)
+    # produces a hookable swapchain. Verified on RDNA3 passthrough.
+    import guest.crucible_guest_agent as agent_mod
+
+    captured = {}
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(agent_mod.subprocess, "run", fake_run)
+    resp = handler.handle(_launch_cmd())
+    assert resp.status == "ok"
+    assert captured["argv"][:3] == ["vkmark", "--winsys", "headless"]
+    # caller args still appended
+    assert "--size" in captured["argv"]
+
+
+def test_launch_benchmark_mangohud_log_duration_finite(handler, monkeypatch):
+    # log_duration=0 means "log until stop_logging", but nothing ever calls
+    # stop_logging before the app exits, so the CSV is never written.
+    # no_display suppresses the HUD update loop that feeds the logger —
+    # also fatal. The CSV only appears with a finite log_duration that
+    # elapses before the benchmark exits, plus the HUD left enabled.
+    import guest.crucible_guest_agent as agent_mod
+
+    captured = {}
+
+    def fake_run(argv, **kwargs):
+        captured["env"] = kwargs.get("env")
+
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(agent_mod.subprocess, "run", fake_run)
+    resp = handler.handle(_launch_cmd(duration_secs=15))
+    assert resp.status == "ok"
+    config = captured["env"]["MANGOHUD_CONFIG"]
+    assert "log_duration=13" in config
+    assert "log_interval=100" in config
+    assert "autostart_log=1" in config
+    assert "no_display" not in config
+
+
+def test_launch_benchmark_log_duration_clamped_and_defaulted(handler, monkeypatch):
+    import guest.crucible_guest_agent as agent_mod
+
+    captured = {}
+
+    def fake_run(argv, **kwargs):
+        captured["env"] = kwargs.get("env")
+
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(agent_mod.subprocess, "run", fake_run)
+
+    # Tiny duration clamps to 1s, never 0 (0 = the never-flushes bug).
+    resp = handler.handle(_launch_cmd(duration_secs=2))
+    assert resp.status == "ok"
+    assert "log_duration=1" in captured["env"]["MANGOHUD_CONFIG"]
+
+    # Missing duration falls back to the module default.
+    resp = handler.handle(_launch_cmd())
+    assert resp.status == "ok"
+    expected = max(1, agent_mod.DEFAULT_LAUNCH_BENCHMARK_DURATION_SECS - 2)
+    assert f"log_duration={expected}" in captured["env"]["MANGOHUD_CONFIG"]
