@@ -102,14 +102,37 @@ pub fn parse_agent_response(value: &serde_json::Value) -> serde_json::Value {
         return value.clone();
     };
     let trimmed = text.trim();
-    let stripped = if let Some(rest) = trimmed.strip_prefix("```json") {
-        rest.trim_end_matches("```").trim()
-    } else if let Some(rest) = trimmed.strip_prefix("```") {
-        rest.trim_end_matches("```").trim()
-    } else {
-        trimmed
-    };
-    serde_json::from_str(stripped).unwrap_or_else(|_| value.clone())
+
+    // 1. A ```json fence anywhere in the text (Claude routinely wraps the
+    //    JSON in explanatory prose on both sides).
+    for opener in ["```json", "```"] {
+        if let Some(start) = trimmed.find(opener) {
+            let rest = &trimmed[start + opener.len()..];
+            let inner = match rest.find("```") {
+                Some(end) => &rest[..end],
+                None => rest,
+            };
+            if let Ok(parsed) = serde_json::from_str(inner.trim()) {
+                return parsed;
+            }
+        }
+    }
+
+    // 2. The whole text as bare JSON.
+    if let Ok(parsed) = serde_json::from_str(trimmed) {
+        return parsed;
+    }
+
+    // 3. First '{' to last '}' — one JSON object embedded in prose.
+    if let (Some(start), Some(end)) = (trimmed.find('{'), trimmed.rfind('}')) {
+        if start < end {
+            if let Ok(parsed) = serde_json::from_str(&trimmed[start..=end]) {
+                return parsed;
+            }
+        }
+    }
+
+    value.clone()
 }
 
 /// Pull a `patch_path` out of an Optimizer envelope. Tries the top level first
@@ -347,6 +370,21 @@ impl Orchestrator {
         agent_result: &serde_json::Value,
     ) -> Result<()> {
         let parsed = parse_agent_response(agent_result);
+        // Every profiler path (synthetic and game) emits an explicit
+        // fps_avg key — even the synthetic one writes fps_avg = 0.0. A
+        // missing key means the response wasn't parseable (or the agent
+        // reported an error); defaulting it to 0.0 once turned a 14k-fps
+        // live-GPU run into a "successful" all-zeros measurement.
+        if parsed.get("fps_avg").and_then(|v| v.as_f64()).is_none() {
+            anyhow::bail!(
+                "profiler {phase} response has no numeric fps_avg; raw response: {}",
+                serde_json::to_string(agent_result)
+                    .unwrap_or_default()
+                    .chars()
+                    .take(2000)
+                    .collect::<String>()
+            );
+        }
         let fps_avg = json_f64(&parsed, "fps_avg");
         let fps_p1 = json_f64(&parsed, "fps_p1");
         let frame_time_p99_ms = json_f64(&parsed, "frame_time_p99_ms");
@@ -744,6 +782,32 @@ mod tests {
         });
         let parsed = parse_agent_response(&raw);
         assert!((parsed["fps_avg"].as_f64().unwrap() - 60.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_agent_response_finds_fenced_json_amid_prose() {
+        // Real Claude profiler output: prose before AND after the fence.
+        // The old prefix-only strip failed here, fell back to the raw
+        // envelope, and json_f64 silently turned a 14k fps measurement
+        // into 0.0 — a live-GPU e2e "passed" the cycle with zeros.
+        let raw = serde_json::json!({
+            "response": "Perfect! I've collected the measurements.\n\n\
+                ```json\n{\"fps_avg\": 14463.5, \"fps_p1\": 10222.5}\n```\n\n\
+                The benchmark ran for 30 seconds with excellent results."
+        });
+        let parsed = parse_agent_response(&raw);
+        assert!((parsed["fps_avg"].as_f64().unwrap() - 14463.5).abs() < f64::EPSILON);
+        assert!((parsed["fps_p1"].as_f64().unwrap() - 10222.5).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_agent_response_falls_back_to_brace_extraction() {
+        // No fence at all — prose with one embedded JSON object.
+        let raw = serde_json::json!({
+            "response": "Here are the results: {\"fps_avg\": 42.0} as requested."
+        });
+        let parsed = parse_agent_response(&raw);
+        assert!((parsed["fps_avg"].as_f64().unwrap() - 42.0).abs() < f64::EPSILON);
     }
 
     #[test]
