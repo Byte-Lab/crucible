@@ -103,18 +103,24 @@ pub fn parse_agent_response(value: &serde_json::Value) -> serde_json::Value {
     };
     let trimmed = text.trim();
 
-    // 1. A ```json fence anywhere in the text (Claude routinely wraps the
-    //    JSON in explanatory prose on both sides).
-    for opener in ["```json", "```"] {
-        if let Some(start) = trimmed.find(opener) {
-            let rest = &trimmed[start + opener.len()..];
-            let inner = match rest.find("```") {
-                Some(end) => &rest[..end],
-                None => rest,
-            };
-            if let Ok(parsed) = serde_json::from_str(inner.trim()) {
-                return parsed;
-            }
+    // 1. A code fence anywhere in the text (Claude routinely wraps the
+    //    JSON in explanatory prose on both sides). Prefer the ```json
+    //    opener; only fall back to a bare ``` fence when no ```json fence
+    //    exists at all — otherwise the bare match re-finds the same fence
+    //    with "json" glued to the payload.
+    let opener = if trimmed.contains("```json") {
+        "```json"
+    } else {
+        "```"
+    };
+    if let Some(start) = trimmed.find(opener) {
+        let rest = &trimmed[start + opener.len()..];
+        let inner = match rest.find("```") {
+            Some(end) => &rest[..end],
+            None => rest,
+        };
+        if let Ok(parsed) = serde_json::from_str(inner.trim()) {
+            return parsed;
         }
     }
 
@@ -808,6 +814,23 @@ mod tests {
         });
         let parsed = parse_agent_response(&raw);
         assert!((parsed["fps_avg"].as_f64().unwrap() - 42.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn parse_agent_response_rejects_ambiguous_multi_object_prose() {
+        // Two JSON objects in prose: first-{ to last-} spans both, which
+        // is not valid JSON, so extraction must NOT silently pick either
+        // object. The raw envelope comes back and persist_measurement's
+        // missing-fps_avg check turns it into a loud error.
+        let raw = serde_json::json!({
+            "response": "Old: {\"fps_avg\": 0.0} but new: {\"fps_avg\": 14463.5} done."
+        });
+        let parsed = parse_agent_response(&raw);
+        assert!(
+            parsed.get("fps_avg").is_none(),
+            "ambiguous prose must not yield a metrics object: {parsed}"
+        );
+        assert!(parsed.get("response").is_some());
     }
 
     #[test]

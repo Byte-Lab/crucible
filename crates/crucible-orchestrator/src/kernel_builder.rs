@@ -92,18 +92,26 @@ impl KernelBuilder {
                 String::from_utf8_lossy(&output.stderr)
             );
         }
-        let args = self.build_modules_install_command();
-        let output = Command::new(&args[0])
-            .args(&args[1..])
-            .current_dir(&self.kernel_src)
-            .output()
-            .await
-            .context("failed to install modules")?;
-        if !output.status.success() {
-            anyhow::bail!(
-                "modules_install failed: {}",
-                String::from_utf8_lossy(&output.stderr)
-            );
+        // Module-less configs (CONFIG_MODULES=n) make modules_install fail
+        // confusingly after a successful build; the synthetic loop needs no
+        // modules at all, so only install when the config builds any.
+        let has_modules = std::fs::read_to_string(self.kernel_src.join(".config"))
+            .map(|c| c.contains("CONFIG_MODULES=y"))
+            .unwrap_or(false);
+        if has_modules {
+            let args = self.build_modules_install_command();
+            let output = Command::new(&args[0])
+                .args(&args[1..])
+                .current_dir(&self.kernel_src)
+                .output()
+                .await
+                .context("failed to install modules")?;
+            if !output.status.success() {
+                anyhow::bail!(
+                    "modules_install failed: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
         }
         let bzimage = self.kernel_src.join("arch/x86/boot/bzImage");
         tracing::info!(path = %bzimage.display(), "kernel built");

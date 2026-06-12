@@ -162,6 +162,12 @@ done
 # /dev/vfio/<group> node, and enough RLIMIT_MEMLOCK to pin all guest RAM
 # for the IOMMU mappings.
 run_user="${SUDO_USER:-$(id -un)}"
+if [[ "$run_user" == "root" ]]; then
+    echo "[setup-host] WARN: invoked as root without sudo — /dev/vfio nodes will be"
+    echo "             owned by root, and an unprivileged orchestrator cannot open"
+    echo "             them. Re-run via sudo from the orchestrator's user, or chown"
+    echo "             the nodes manually."
+fi
 for m in "${GROUP_MEMBERS[@]}"; do
     g="$(basename "$(readlink "/sys/bus/pci/devices/$m/iommu_group" 2>/dev/null)")" || continue
     [[ -n "$g" && -e "/dev/vfio/$g" ]] || continue

@@ -333,11 +333,11 @@ class GuestAgentHandler:
             )
         output_path = Path(resolved_output)
         output_dir = output_path.parent
-        # MANGOHUD_CONFIG is comma-separated; a comma in the folder path
-        # would silently corrupt the whole config string.
-        if "," in str(output_dir):
+        # MANGOHUD_CONFIG is a comma-separated key=value string; either
+        # character in the folder path silently corrupts the whole config.
+        if "," in str(output_dir) or "=" in str(output_dir):
             return GuestResponse.error(
-                f"mangohud_output dir must not contain a comma: {output_dir}"
+                f"mangohud_output dir must not contain ',' or '=': {output_dir}"
             )
         try:
             output_dir.mkdir(parents=True, exist_ok=True)

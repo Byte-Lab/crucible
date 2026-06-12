@@ -41,7 +41,8 @@ async fn run_cycle_and_verify(measurement_toml: &str, rootfs: &str, vfio_device:
     // TempDir guard deletes them with the panic unwinding past it.
     if std::env::var("CRUCIBLE_E2E_KEEP_ARTIFACTS").is_ok() {
         tmp_dir.disable_cleanup(true);
-        eprintln!("e2e: artifacts kept at {}", tmp_dir.path().display());
+        // println: stdout survives without --nocapture on failure output.
+        println!("e2e: artifacts kept at {}", tmp_dir.path().display());
     }
     let db_path = tmp_dir.path().join("e2e.db");
     let artifact_dir = tmp_dir.path().join("artifacts");

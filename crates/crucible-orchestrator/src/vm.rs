@@ -49,11 +49,14 @@ impl VmManager {
         // long as we keep it alive). The synthetic loop doesn't need
         // systemd to start; the agent itself is the only service.
         let mut qemu_opts = String::new();
-        for (i, func) in vfio_functions.iter().enumerate() {
-            if i == 0 {
-                // rombar=0 on the VGA function: QEMU's option-ROM read of a
-                // GPU the host previously drove hangs device realization
-                // forever (observed on a live-unbound 7900 XT).
+        let configured = self.config.vfio_device.trim();
+        for func in vfio_functions {
+            if func == configured {
+                // rombar=0 on the configured (VGA) function: QEMU's
+                // option-ROM read of a GPU the host previously drove hangs
+                // device realization forever (observed on a live-unbound
+                // 7900 XT). Keyed on the config value, not list position —
+                // sibling discovery order is not a contract.
                 qemu_opts.push_str(&format!("-device vfio-pci,host={func},rombar=0 "));
             } else {
                 qemu_opts.push_str(&format!("-device vfio-pci,host={func} "));
@@ -139,7 +142,11 @@ impl VmManager {
         };
         let mut funcs: Vec<String> = list_matching(prefix)
             .into_iter()
-            .map(|name| name.trim_start_matches("0000:").to_string())
+            .map(|name| {
+                name.strip_prefix("0000:")
+                    .map(str::to_string)
+                    .unwrap_or(name)
+            })
             .collect();
         funcs.sort();
         if funcs.is_empty() {
@@ -308,16 +315,25 @@ impl VmManager {
             // qemu); killing only the direct child leaves QEMU running and
             // holding the vsock CID.
             if let Some(pid) = child.id() {
+                // pid is u32; clamp before negating so the cast can never
+                // overflow to i32::MIN (whose meaning kill() reserves).
+                let pgid = -(pid.min(i32::MAX as u32) as i32);
                 // SAFETY: plain libc kill on a pgid we created via
                 // process_group(0); no memory at stake.
-                unsafe {
-                    libc::kill(-(pid as i32), libc::SIGKILL);
+                let ret = unsafe { libc::kill(pgid, libc::SIGKILL) };
+                if ret != 0 {
+                    tracing::warn!(
+                        pgid,
+                        err = %std::io::Error::last_os_error(),
+                        "process-group kill failed"
+                    );
                 }
             }
-            child
-                .kill()
-                .await
-                .context("failed to kill VM process")?;
+            // The group SIGKILL may already have reaped the direct child;
+            // a kill() error here must not mask a successful shutdown.
+            if let Err(err) = child.kill().await {
+                tracing::warn!(%err, "direct child kill failed (group already dead?)");
+            }
             child
                 .wait()
                 .await
