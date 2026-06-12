@@ -39,14 +39,22 @@ Respond with JSON: {"fps_avg": <float>, "fps_p1": <float>, "frame_time_p99_ms": 
 
         benchmark = context.get("game_benchmark")
         if benchmark:
-            args = context.get("benchmark_args", [])
+            duration = int(context.get("duration_secs") or 30)
+            # One scene with an explicit duration: vkmark's full default
+            # suite runs for minutes, and MangoHud's log window (sized from
+            # duration_secs in the guest) must elapse before the app exits.
+            if benchmark == "vkmark":
+                args = ["-b", f"vertex:duration={duration}"]
+            else:
+                args = ["-b", f"build:duration={duration}"]
             mangohud_output = context.get(
                 "mangohud_output", "/tmp/crucible_mangohud.csv"
             )
             msg = (
                 f"Collect {phase} measurements via the native GPU benchmark.\n"
                 f"1. Call launch_benchmark(name={benchmark!r}, args={args!r}, "
-                f"mangohud_output={mangohud_output!r}) exactly once.\n"
+                f"mangohud_output={mangohud_output!r}, "
+                f"duration_secs={duration}) exactly once.\n"
                 f"2. Call fetch_mangohud_log(log_path={mangohud_output!r}) to "
                 "retrieve frame statistics.\n"
                 "Then emit the final JSON object from the system prompt with:\n"
@@ -57,7 +65,13 @@ Respond with JSON: {"fps_avg": <float>, "fps_p1": <float>, "frame_time_p99_ms": 
                 "  psi_memory_avg = psi_memory_delta from the launch_benchmark "
                 "result\n"
                 "Set collection_paths to "
-                f'{{"mangohud": {mangohud_output!r}}}.'
+                f'{{"mangohud": {mangohud_output!r}}}.\n'
+                "If launch_benchmark or fetch_mangohud_log returns an error, "
+                "or launch_benchmark reports log_found=false, do NOT invent "
+                "metrics and do NOT emit zeros: respond with "
+                '{"error": "<what failed and the exact tool error>"} instead. '
+                "A zero fps_avg from a real run is impossible and would be "
+                "silently accepted as a measurement."
             )
             if hypothesis:
                 msg = f"Hypothesis: {hypothesis}\n" + msg

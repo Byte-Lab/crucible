@@ -55,11 +55,17 @@ def test_launch_benchmark_forwards_to_guest():
         "name": "vkmark",
         "args": ["--size", "1920x1080"],
         "mangohud_output": "/tmp/mh.csv",
+        "duration_secs": 15,
     })
     assert result["status"] == "ok"
     assert rpc.calls == [(
         "launch_benchmark",
-        {"name": "vkmark", "args": ["--size", "1920x1080"], "mangohud_output": "/tmp/mh.csv"},
+        {
+            "name": "vkmark",
+            "args": ["--size", "1920x1080"],
+            "mangohud_output": "/tmp/mh.csv",
+            "duration_secs": 15,
+        },
     )]
 
 

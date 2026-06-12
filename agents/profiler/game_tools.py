@@ -23,9 +23,16 @@ def make_profiler_game_tools(registry: ToolRegistry, guest_rpc: Any) -> None:
         "Run a native GPU benchmark in the guest VM under MangoHud. `name` is "
         "'vkmark' or 'glmark2'; `args` are passed through to the benchmark; "
         "`mangohud_output` is the guest path where the frame-time CSV will be "
-        "written. Returns exit_code, log_found, and psi_*_delta."
+        "written; `duration_secs` is the expected benchmark runtime (the guest "
+        "sizes MangoHud's log window from it — keep it equal to the duration "
+        "you pass in `args`). Returns exit_code, log_found, and psi_*_delta."
     ))
-    def launch_benchmark(name: str, args: list[str], mangohud_output: str) -> dict:
+    def launch_benchmark(
+        name: str,
+        args: list[str],
+        mangohud_output: str,
+        duration_secs: int = 10,
+    ) -> dict:
         if guest_rpc is None:
             return {
                 "status": "dry_run",
@@ -39,6 +46,7 @@ def make_profiler_game_tools(registry: ToolRegistry, guest_rpc: Any) -> None:
                 "name": name,
                 "args": args,
                 "mangohud_output": mangohud_output,
+                "duration_secs": duration_secs,
             })
         except Exception as exc:
             return {"status": "error", "error": str(exc)}

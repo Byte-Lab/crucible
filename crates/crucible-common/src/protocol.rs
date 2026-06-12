@@ -111,6 +111,10 @@ pub enum GuestCommand {
         name: String,
         args: Vec<String>,
         mangohud_output: String,
+        /// Expected benchmark runtime; the guest derives MangoHud's finite
+        /// log window from it (log must stop before the app exits or the
+        /// CSV is never flushed).
+        duration_secs: u32,
     },
 }
 
@@ -237,21 +241,25 @@ mod tests {
             name: "vkmark".to_string(),
             args: vec!["--size".to_string(), "1920x1080".to_string()],
             mangohud_output: "/tmp/crucible_mangohud.csv".to_string(),
+            duration_secs: 15,
         };
         let json = serde_json::to_value(&cmd).unwrap();
         assert_eq!(json["cmd"], "launch_benchmark");
         assert_eq!(json["name"], "vkmark");
         assert_eq!(json["mangohud_output"], "/tmp/crucible_mangohud.csv");
+        assert_eq!(json["duration_secs"], 15);
         let parsed: GuestCommand = serde_json::from_value(json).unwrap();
         if let GuestCommand::LaunchBenchmark {
             name,
             args,
             mangohud_output,
+            duration_secs,
         } = parsed
         {
             assert_eq!(name, "vkmark");
             assert_eq!(args, vec!["--size", "1920x1080"]);
             assert_eq!(mangohud_output, "/tmp/crucible_mangohud.csv");
+            assert_eq!(duration_secs, 15);
         } else {
             panic!("wrong variant");
         }
