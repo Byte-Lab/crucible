@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import glob
 import json
 import logging
 import os
@@ -363,6 +364,27 @@ class GuestAgentHandler:
                 f"log_duration={log_duration},log_interval=100"
             ),
         })
+
+        # vng --exec boots the agent directly: no systemd, no udev coldplug,
+        # so nothing auto-loads the GPU driver for a passed-through device.
+        # Idempotent; failure is tolerated (no GPU → llvmpipe still renders
+        # via the headless winsys).
+        try:
+            subprocess.run(
+                ["modprobe", "amdgpu"],
+                capture_output=True,
+                timeout=60,
+                check=False,
+            )
+            # amdgpu's probe of a real GPU takes seconds; give the render
+            # node a moment to appear so Vulkan enumerates RADV instead of
+            # silently falling back to llvmpipe.
+            for _ in range(20):
+                if glob.glob("/dev/dri/renderD*"):
+                    break
+                time.sleep(0.5)
+        except Exception:
+            pass
 
         psi_pre = _read_system_psi_avg10()
         try:

@@ -270,3 +270,29 @@ def test_launch_benchmark_log_duration_clamped_and_defaulted(handler, monkeypatc
     assert resp.status == "ok"
     expected = max(1, agent_mod.DEFAULT_LAUNCH_BENCHMARK_DURATION_SECS - 2)
     assert f"log_duration={expected}" in captured["env"]["MANGOHUD_CONFIG"]
+
+
+def test_launch_benchmark_loads_gpu_module_first(handler, monkeypatch):
+    # The orchestrator boots the guest with vng --exec: no systemd, no udev
+    # coldplug, so nothing auto-loads amdgpu for the passed-through GPU.
+    # The handler must modprobe before launching or the benchmark falls
+    # back to llvmpipe (or finds no Vulkan device at all).
+    import guest.crucible_guest_agent as agent_mod
+
+    calls = []
+
+    def fake_run(argv, **kwargs):
+        calls.append(argv)
+
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(agent_mod.subprocess, "run", fake_run)
+    resp = handler.handle(_launch_cmd())
+    assert resp.status == "ok"
+    assert calls[0][:2] == ["modprobe", "amdgpu"]
+    assert calls[1][0] == "vkmark"
