@@ -66,23 +66,64 @@ Vulkan layer / LD_PRELOAD headlessly).
 
 ## Remaining verification (hardware checkpoints)
 
-- [ ] Build the game rootfs: `scripts/setup-game-rootfs.sh` (sudo + network).
-- [ ] Boot check: `vng --root ~/.crucible/game-rootfs -- vulkaninfo` shows
-  lavapipe (or RADV once VFIO is bound); `vkmark --list-scenes` works.
-- [ ] Software-render e2e: `CRUCIBLE_E2E_GPU=1 cargo test --test e2e -- --nocapture`
-  green with non-zero fps via lavapipe.
-- [ ] VFIO checkpoint: confirm host display is on the Raphael iGPU
-  (13:00.0), then `scripts/setup-host.sh 03:00.0 --bind`, set
-  `CRUCIBLE_VFIO_DEVICE=03:00.0`, rerun the GPU e2e on real RDNA3.
-- [ ] Synthetic regression: `CRUCIBLE_E2E=1 cargo test --test e2e` still green.
+- [x] Build the game rootfs: `scripts/setup-game-rootfs.sh` (sudo + network).
+  Done 2026-06-12.
+- [x] Boot check: RADV reports "AMD Radeon RX 7900 XT (RADV NAVI31)" with
+  VFIO passthrough; `vkmark --list-scenes` works. (llvmpipe before bind.)
+- [ ] ~~Software-render e2e~~ — invalidated: vkmark cannot present without a
+  DRM device, and the test kernel exposes none without a passed-through
+  GPU. The "lavapipe still exercises the path" assumption was wrong (see
+  hardware findings below). The GPU e2e is the only meaningful gate.
+- [x] VFIO checkpoint: monitor moved to iGPU output, display-manager
+  restart, `setup-host.sh` bind of **all four** GPU functions, GPU e2e on
+  real RDNA3. vkmark scores 14k (kms) / 40k (headless) FPS in-guest;
+  MangoHud CSV produced and parsed. Done 2026-06-12.
+- [x] Synthetic regression: `CRUCIBLE_E2E=1 cargo test --test e2e` green
+  (298s, 2026-06-12) — needs `.venv/bin` on PATH since the Agent SDK moved
+  into the uv venv.
+
+## Hardware findings (2026-06-12, first real-GPU run)
+
+Chain of failures found and fixed getting the first frames out:
+
+- **7900 XT is a 4-function PCI device** (VGA 03:00.0 + HDMI audio .1 +
+  USB .2 + UCSI .3), each alone in its own IOMMU group. QEMU's bus reset
+  needs *all* of them on vfio-pci: "Cannot reset device, depends on group
+  N which is not owned". `setup-host.sh` now walks the whole slot;
+  `VmManager` discovers siblings and validates each.
+- **QEMU hangs forever reading the GPU option ROM** of a card the host
+  drove earlier (live-unbound amdgpu). `rombar=0` on the VGA function
+  fixes it; vm.rs now always sets it.
+- **Unprivileged QEMU needs `/dev/vfio/<group>` ownership and memlock ≥
+  guest RAM** (8 MB default → `vfio_container_dma_map = -12`).
+  `setup-host.sh --bind` now chowns the nodes and prints the prlimit hint.
+- **The test kernel needs `CONFIG_DRM_AMDGPU=m`** and the modules must be
+  visible in the guest: vng with `--root` resolves modules only from
+  inside the rootfs, ignoring `.virtme_mods`. `KernelBuilder` now runs
+  `make modules_install INSTALL_MOD_PATH=.virtme_mods`; `VmManager`
+  overlays it via `--rodir /lib/modules/<kver>=…`.
+- **vkmark's default kms winsys is invisible to MangoHud**: it presents
+  via raw DRM atomic commits and never creates a VkSwapchainKHR, so the
+  layer's QueuePresentKHR hook records zero frames. The packaged vkmark
+  ships an undocumented `headless` winsys (VK_EXT_headless_surface) that
+  creates a real swapchain — the guest now forces `--winsys headless`.
+- **MangoHud `log_duration=0` never writes the CSV** (the file is only
+  flushed when logging *stops* while the app is alive) and **`no_display`
+  suppresses the HUD update loop that feeds the logger**. The guest now
+  derives a finite window from `duration_secs` (new LaunchBenchmark field)
+  and leaves the HUD enabled.
+- **vng's qemu grandchild survives `kill_on_drop`** (vng wraps virtme-run
+  in `sh -c`); a leaked QEMU held vsock CID 3 across runs. vm.rs now
+  spawns into a dedicated process group and shutdown kills the group.
+- Profiler prompt now forbids fabricating metrics: tool errors or
+  `log_found=false` must produce `{"error": …}`, not zeros — a zero
+  `fps_avg` masked the entire VFIO failure as a "successful" cycle.
 
 ## Notes / decisions
 
 - vng already passes `-display none -vga none` to QEMU
   (virtme/architectures.py); adding our own `-display none` would be a
   duplicate-option error. Headless is the default.
-- The host 7900 XT sits alone in IOMMU group 14 (no HDMI-audio sibling to
-  drag along) — clean passthrough topology.
 - Firmware/kernel skew risk: trixie's `firmware-amd-graphics` must satisfy
   the kernel-under-test's amdgpu; revisit if optimizer kernels outrun
   packaged firmware.

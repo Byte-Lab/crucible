@@ -24,6 +24,22 @@ CRUCIBLE_E2E=1 cargo test --test e2e -- --nocapture       # hardware-gated synth
 CRUCIBLE_E2E_GPU=1 cargo test --test e2e -- --nocapture   # hardware-gated game-mode smoke
 ```
 
+Both e2e gates (and any orchestrator run that spawns agents) need the uv
+venv's python on PATH — the orchestrator spawns bare `python3`, and
+`claude-agent-sdk`/pydantic live in `.venv`, not the system interpreter:
+
+```bash
+PATH="$PWD/.venv/bin:$PATH" CRUCIBLE_E2E=1 cargo test --test e2e -- --nocapture
+```
+
+The GPU gate additionally requires (all runtime-only, reset by reboot):
+`scripts/setup-host.sh <gpu-addr> --bind` run for the GPU (binds **every
+function of the slot** to vfio-pci and chowns the `/dev/vfio/<group>`
+nodes), a memlock limit ≥ guest RAM for the orchestrator process
+(`sudo prlimit --pid <pid> --memlock=unlimited`), and `~/.cache/virtme-ng`
+existing (QEMU dies instantly on the missing 9p fsdev dir if a cache
+cleaner removed it).
+
 Build the guest rootfs images (mmdebstrap; both share `scripts/lib/rootfs-common.sh`):
 
 ```bash
@@ -96,7 +112,14 @@ Synthetic-loop path (`[measurement] mode = "synthetic"`, default): the profiler 
 
 End-to-end status (2026-05-15): post Agent SDK migration, `cargo test --test e2e` with `CRUCIBLE_E2E=1` now runs the full **SelectGame → ProvisionVm → BaselineMeasurement → Analyze → GenerateOptimization → ApplyChanges → ComparisonMeasurement → Evaluate → (Accept | Reject)** pipeline live; a green run completes in ~280-330s on a cached kernel. `Reject` calls `KernelBuilder::revert_patch` on the final applied patch (orchestrator.rs maps `Verdict::Regressed → CycleState::Reject` and invokes the revert before transitioning to `Idle`). `Iterate` is now wired: `Verdict::Marginal` re-enters Analyze through the `Evaluate → Iterate → Analyze` path, bounded by `agents.optimizer.max_attempts_per_bottleneck` (default 3), with `previous_attempts` threaded into the Analyzer/Optimizer context. The hardware-gated test prints `e2e skipped` and passes when `CRUCIBLE_E2E` is unset.
 
-Game-mode status (2026-06-05): the full game-mode plumbing is wired (protocol `LaunchBenchmark`, byte-returning `fetch_file`, profiler game tools, `measurement_context` threading, game_selector native benchmarks, trixie game rootfs script, VFIO `validate_passthrough` fail-fast). A second hardware-gated e2e (`CRUCIBLE_E2E_GPU=1`, `gpu_game_cycle_produces_nonzero_fps`) runs the same pipeline with `mode = "game"` and asserts non-zero `fps_avg` plus the tool-leak scan; it needs the game rootfs stamp (`.crucible-game-built`) and optionally `CRUCIBLE_VFIO_DEVICE` for real passthrough (lavapipe otherwise). Not yet verified on hardware — the host's 7900 XT (03:00.0, IOMMU group of its own) is still bound to amdgpu; `scripts/setup-host.sh 03:00.0 --bind` flips it after confirming the host display isn't on it.
+Game-mode status (2026-06-12): **verified on real hardware.** The 7900 XT passes through to the guest (RADV NAVI31), vkmark renders real frames, and MangoHud produces a parseable frame-time CSV. Hard-won constraints, all encoded in code — do not regress them:
+- The GPU is a **4-function device** (VGA/audio/USB/UCSI in separate IOMMU groups); QEMU's bus reset needs all of them on vfio-pci. `VmManager::vfio_sibling_functions` discovers them, `validate_passthrough` checks each, and `setup-host.sh` binds the whole slot.
+- `rombar=0` on the VGA function is mandatory — QEMU hangs forever reading the option ROM of a GPU the host previously drove.
+- The guest runs vkmark with `--winsys headless`: the default kms winsys presents via raw DRM atomic commits with no VkSwapchainKHR, so MangoHud's present hook records nothing.
+- MangoHud only flushes its CSV when logging stops *before* the app exits, and `no_display` starves the logger. The guest derives a finite `log_duration` from `LaunchBenchmark.duration_secs` (wire field, three-file rule) and keeps the HUD enabled.
+- `KernelBuilder` runs `make modules_install INSTALL_MOD_PATH=.virtme_mods` and `VmManager` overlays it via `--rodir` — vng with `--root` resolves modules only from inside the rootfs, and the test kernel needs `CONFIG_DRM_AMDGPU=m` for the guest to drive the card.
+- vng's QEMU grandchild survives `kill_on_drop` (`sh -c` chain); `VmManager` spawns into a process group and `shutdown` kills the group, otherwise a leaked QEMU holds vsock CID 3 across runs.
+- The profiler prompt forbids fabricating metrics on tool failure (`{"error": …}` instead of zeros); zero `fps_avg` previously masked a complete VFIO failure as a successful cycle.
 
 ### Agent dispatch protocol
 
