@@ -403,8 +403,15 @@ class GuestAgentHandler:
             )
         psi_post = _read_system_psi_avg10()
 
+        # MangoHud writes two CSVs: the per-frame log and a *_summary.csv
+        # with aggregates, written last (= newest). The profiler's parser
+        # needs the frame log; shipping the summary yields zero frames.
         new_logs = sorted(
-            set(output_dir.glob("*.csv")) - pre_existing,
+            (
+                p
+                for p in set(output_dir.glob("*.csv")) - pre_existing
+                if not p.name.endswith("_summary.csv")
+            ),
             key=lambda p: p.stat().st_mtime,
         )
         log_found = bool(new_logs)

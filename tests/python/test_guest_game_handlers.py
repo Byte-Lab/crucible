@@ -296,3 +296,45 @@ def test_launch_benchmark_loads_gpu_module_first(handler, monkeypatch):
     assert resp.status == "ok"
     assert calls[0][:2] == ["modprobe", "amdgpu"]
     assert calls[1][0] == "vkmark"
+
+
+def test_launch_benchmark_renames_frame_log_not_summary(handler, monkeypatch, tmp_path):
+    # MangoHud writes TWO csvs per run: <app>_<ts>.csv (per-frame rows) and
+    # <app>_<ts>_summary.csv (aggregates, written LAST so it is the newest).
+    # Picking "newest csv" shipped the summary to the profiler, whose parser
+    # found zero frame rows and emitted fps_avg=0 for a real GPU run.
+    import guest.crucible_guest_agent as agent_mod
+
+    monkeypatch.setattr(
+        agent_mod, "GUEST_FILE_ALLOWED_PREFIXES", (str(tmp_path) + "/",)
+    )
+    out = tmp_path / "crucible_mangohud.csv"
+
+    def fake_run(argv, **kwargs):
+        if argv[0] == "modprobe":
+            class R:
+                returncode = 0
+                stdout = ""
+                stderr = ""
+            return R()
+        # benchmark "runs": MangoHud drops frame log first, summary second
+        frame_log = tmp_path / "vkmark_2026-06-12_22-00-00.csv"
+        frame_log.write_text("os,cpu,gpu\nx,y,z\nfps,frametime\n100,10\n")
+        summary = tmp_path / "vkmark_2026-06-12_22-00-00_summary.csv"
+        summary.write_text("0.1% Min FPS,Average FPS\n578.2,965.1\n")
+        import os as _os
+        _os.utime(summary, None)  # summary is newest
+
+        class R:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return R()
+
+    monkeypatch.setattr(agent_mod.subprocess, "run", fake_run)
+    resp = handler.handle(_launch_cmd(mangohud_output=str(out)))
+    assert resp.status == "ok"
+    assert resp.data["log_found"] is True
+    content = out.read_text()
+    assert "Average FPS" not in content, "summary csv was picked instead of frame log"
+    assert "fps,frametime" in content
