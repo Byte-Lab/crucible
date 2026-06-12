@@ -197,6 +197,7 @@ dependencies = [
  "anyhow",
  "clap",
  "crucible-common",
+ "libc",
  "rusqlite",
  "serde",
  "serde_json",

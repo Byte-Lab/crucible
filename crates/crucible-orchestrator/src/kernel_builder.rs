@@ -65,6 +65,19 @@ impl KernelBuilder {
         Ok(())
     }
 
+    /// `make modules_install` into the build tree's `.virtme_mods`, where
+    /// `VmManager::find_module_overlay` picks it up. Without this the guest
+    /// cannot modprobe modular drivers (amdgpu for game mode) because vng
+    /// with `--root` only resolves modules from inside the rootfs.
+    pub fn build_modules_install_command(&self) -> Vec<String> {
+        vec![
+            "make".to_string(),
+            "-j".to_string(),
+            "modules_install".to_string(),
+            "INSTALL_MOD_PATH=.virtme_mods".to_string(),
+        ]
+    }
+
     pub async fn build_kernel(&self) -> Result<PathBuf> {
         let args = self.build_vng_build_command();
         let output = Command::new(&args[0])
@@ -76,6 +89,19 @@ impl KernelBuilder {
         if !output.status.success() {
             anyhow::bail!(
                 "kernel build failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        let args = self.build_modules_install_command();
+        let output = Command::new(&args[0])
+            .args(&args[1..])
+            .current_dir(&self.kernel_src)
+            .output()
+            .await
+            .context("failed to install modules")?;
+        if !output.status.success() {
+            anyhow::bail!(
+                "modules_install failed: {}",
                 String::from_utf8_lossy(&output.stderr)
             );
         }
@@ -143,6 +169,15 @@ mod tests {
         let cmd = builder.build_vng_build_command();
         assert_eq!(cmd[0], "vng");
         assert!(cmd.contains(&"--build".to_string()));
+    }
+
+    #[test]
+    fn modules_install_targets_virtme_mods() {
+        let builder = KernelBuilder::new("/home/void/upstream/linux");
+        let cmd = builder.build_modules_install_command();
+        assert_eq!(cmd[0], "make");
+        assert!(cmd.contains(&"modules_install".to_string()));
+        assert!(cmd.contains(&"INSTALL_MOD_PATH=.virtme_mods".to_string()));
     }
 
     #[test]

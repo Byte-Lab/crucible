@@ -18,6 +18,7 @@ thiserror = { workspace = true }
 anyhow = { workspace = true }
 tokio-vsock = { workspace = true }
 statrs = { workspace = true }
+libc = "0.2"
 
 [dev-dependencies]
 tempfile = "3"
