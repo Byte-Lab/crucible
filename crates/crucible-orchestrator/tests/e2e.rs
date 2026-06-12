@@ -36,7 +36,13 @@ struct CycleOutcome {
 /// Drive one full cycle with the given `[measurement]` body and rootfs,
 /// then verify the durable rows and scan agent stderr for tool leaks.
 async fn run_cycle_and_verify(measurement_toml: &str, rootfs: &str, vfio_device: &str) -> CycleOutcome {
-    let tmp_dir = tempfile::tempdir().unwrap();
+    let mut tmp_dir = tempfile::tempdir().unwrap();
+    // Postmortems on a failed cycle need the agent stderr and the DB; the
+    // TempDir guard deletes them with the panic unwinding past it.
+    if std::env::var("CRUCIBLE_E2E_KEEP_ARTIFACTS").is_ok() {
+        tmp_dir.disable_cleanup(true);
+        eprintln!("e2e: artifacts kept at {}", tmp_dir.path().display());
+    }
     let db_path = tmp_dir.path().join("e2e.db");
     let artifact_dir = tmp_dir.path().join("artifacts");
     let kernel_src = std::env::var("CRUCIBLE_KERNEL_SRC")
