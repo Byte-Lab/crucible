@@ -32,10 +32,17 @@ on hardware 2026-06-12) proved end to end.
 
 ## Phases
 
-- [ ] **G3.0 spike (cheap, do first):** steamcmd in a trixie chroot with
-  the copied host session: does `+login jqueryheadshot` succeed without a
-  Guard prompt? Does `+app_update 570` start downloading? Abort/adjust
-  auth approach before building anything else on it.
+- [x] **G3.0 spike — PASSED (2026-06-12/13):**
+  - steamcmd in a trixie chroot with the copied host session logs in with
+    "cached credentials", **no Steam Guard prompt** (must run as uid 1000,
+    not root — error 13 otherwise; needs /proc mounted). Dota 2
+    (`+app_update 570`) downloads with the free license.
+  - Display chain validated on real RDNA3 in the VM: weston headless
+    (`--backend=headless --renderer=gl --xwayland`, EGL 1.5 on Mesa) +
+    Xwayland; vkmark via `--winsys xcb` (the X11 path a Steam game takes)
+    hits 9,499 FPS on RADV NAVI31 with MangoHud writing the frame CSV
+    through the Xwayland present path. Env recipe: `XDG_RUNTIME_DIR`
+    (0700), `WAYLAND_DISPLAY=wayland-1`, `DISPLAY=:0`, ~6s weston warmup.
 - [ ] **G3.1 rootfs:** extend `setup-game-rootfs.sh` (or a new
   `setup-steam-rootfs.sh` sharing rootfs-common) with: i386 multiarch,
   `steam-installer` (non-free), `steamcmd`, `weston`, `xwayland`,
