@@ -293,6 +293,53 @@ async fn gpu_game_cycle_produces_nonzero_fps() {
     }
 }
 
+#[tokio::test]
+async fn steam_cycle_produces_nonzero_fps() {
+    if std::env::var("CRUCIBLE_E2E_GAME").is_err() {
+        eprintln!(
+            "e2e-game skipped: set CRUCIBLE_E2E_GAME=1 to run (requires vng, kernel src, \
+             steam rootfs with a seeded login + game, bound VFIO GPU)"
+        );
+        return;
+    }
+
+    check_common_prerequisites().expect("e2e-game prerequisites unmet");
+    let rootfs = std::env::var("CRUCIBLE_STEAM_ROOTFS_PATH").unwrap_or_else(|_| {
+        format!("{}/.crucible/steam-rootfs", std::env::var("HOME").unwrap())
+    });
+    assert!(
+        Path::new(&rootfs).join(".crucible-steam-built").exists(),
+        "steam rootfs at {} missing .crucible-steam-built stamp (run scripts/setup-steam-rootfs.sh)",
+        rootfs
+    );
+    // A real GPU is required: Steam titles won't produce meaningful frames
+    // on llvmpipe, and the weston GL renderer wants real EGL.
+    let vfio_device = std::env::var("CRUCIBLE_VFIO_DEVICE")
+        .expect("CRUCIBLE_E2E_GAME requires CRUCIBLE_VFIO_DEVICE (bound via setup-host.sh)");
+
+    let outcome = run_cycle_and_verify(
+        r#"mode = "steam"
+        steam_app_id = 570
+        benchmark_duration_secs = 60
+        runs_per_phase = 1
+        warmup_runs = 0"#,
+        &rootfs,
+        &vfio_device,
+    )
+    .await;
+
+    let db = crucible_orchestrator::db::Database::open(&outcome.db_path).unwrap();
+    for phase in ["baseline", "comparison"] {
+        let rows = db.get_measurements(1, phase).unwrap();
+        assert!(
+            rows.iter().any(|m| m.fps_avg > 0.0),
+            "{phase} measurements all have fps_avg == 0 — Steam frame data \
+             did not flow (artifacts at {})",
+            outcome.artifact_dir.display()
+        );
+    }
+}
+
 fn check_common_prerequisites() -> Result<(), String> {
     if which("vng").is_none() {
         return Err("vng (virtme-ng) is not on PATH".to_string());
