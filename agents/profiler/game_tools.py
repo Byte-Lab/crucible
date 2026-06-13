@@ -52,6 +52,37 @@ def make_profiler_game_tools(registry: ToolRegistry, guest_rpc: Any) -> None:
             return {"status": "error", "error": str(exc)}
 
     @registry.tool(description=(
+        "Run a Steam title in the guest VM under weston-headless + MangoHud. "
+        "`app_id` is the Steam app id; `args` are extra launch options (e.g. "
+        "timedemo flags); `mangohud_output` is the guest CSV path; "
+        "`duration_secs` is the expected benchmark runtime. Returns "
+        "log_found and psi_*_delta."
+    ))
+    def launch_steam_benchmark(
+        app_id: int,
+        args: list[str],
+        mangohud_output: str,
+        duration_secs: int = 60,
+    ) -> dict:
+        if guest_rpc is None:
+            return {
+                "status": "dry_run",
+                "message": (
+                    f"Would launch Steam app {app_id} with args {args} logging "
+                    f"to {mangohud_output} (no guest RPC)"
+                ),
+            }
+        try:
+            return guest_rpc.call("launch_steam_benchmark", {
+                "app_id": app_id,
+                "args": args,
+                "mangohud_output": mangohud_output,
+                "duration_secs": duration_secs,
+            })
+        except Exception as exc:
+            return {"status": "error", "error": str(exc)}
+
+    @registry.tool(description=(
         "Fetch a MangoHud CSV log from the guest VM and parse it into frame "
         "statistics: frame_count, fps_avg, fps_p1, fps_min, fps_max, and "
         "frametime p50/p95/p99 in milliseconds."

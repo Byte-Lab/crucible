@@ -142,3 +142,66 @@ def test_parse_mangohud_csv_skips_metadata_rows():
     assert stats["frame_count"] == 4
     assert stats["fps_min"] == 30.0
     assert stats["fps_max"] == 61.2
+
+
+def test_launch_steam_benchmark_forwards_to_guest():
+    rpc = FakeGuestRpc({
+        "launch_steam_benchmark": {
+            "status": "ok",
+            "data": {"log_found": True, "mangohud_output": "/tmp/mh.csv"},
+        }
+    })
+    registry = _registry(rpc)
+    result = registry.call("launch_steam_benchmark", {
+        "app_id": 570,
+        "args": ["+timedemo", "bench"],
+        "mangohud_output": "/tmp/mh.csv",
+        "duration_secs": 90,
+    })
+    assert result["status"] == "ok"
+    assert rpc.calls == [(
+        "launch_steam_benchmark",
+        {
+            "app_id": 570,
+            "args": ["+timedemo", "bench"],
+            "mangohud_output": "/tmp/mh.csv",
+            "duration_secs": 90,
+        },
+    )]
+
+
+def test_launch_steam_benchmark_dry_run_without_guest():
+    registry = _registry(None)
+    result = registry.call("launch_steam_benchmark", {
+        "app_id": 570,
+        "args": [],
+        "mangohud_output": "/tmp/mh.csv",
+    })
+    assert result["status"] == "dry_run"
+
+
+def test_profiler_steam_user_message_instructs_steam_benchmark():
+    from uuid import uuid4
+
+    from agents.common.protocol import AgentConfig, TaskEnvelope
+    from agents.profiler.agent import ProfilerAgent
+
+    task = TaskEnvelope(
+        task_id=uuid4(),
+        agent="profiler",
+        context={
+            "phase": "baseline",
+            "game": "dota2",
+            "workload_kind": "steam",
+            "steam_app_id": 570,
+            "duration_secs": 90,
+            "mangohud_output": "/tmp/crucible_mangohud.csv",
+        },
+        config=AgentConfig(model="m", max_tokens=1, timeout_seconds=1),
+    )
+    msg = ProfilerAgent().build_user_message(task)
+    assert "launch_steam_benchmark" in msg
+    assert "app_id=570" in msg
+    assert "duration_secs=90" in msg
+    assert "fetch_mangohud_log" in msg
+    assert "do NOT invent metrics" in msg or "NOT invent metrics" in msg

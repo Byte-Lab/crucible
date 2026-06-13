@@ -18,6 +18,15 @@ Respond with JSON: {"app_id": <int>, "name": "<str>", "benchmark_method": "built
         msg = f"Select the next game to benchmark.\nGoals: {goals}\n"
         if history:
             msg += f"Recent history: {history}\n"
+        if context.get("workload_kind") == "steam":
+            app_id = context.get("steam_app_id", 570)
+            msg += (
+                f"The measurement target is the Steam title with app_id "
+                f"{app_id} (pre-installed in the guest rootfs). Respond with "
+                f'app_id {app_id}, its name (570 is "dota2"), '
+                'benchmark_method "timedemo", and benchmark_args [].'
+            )
+            return msg
         if context.get("workload_kind") == "game":
             msg += (
                 "The guest rootfs has no Steam library. Call "

@@ -17,11 +17,15 @@ vsock_cid = 3
 # "synthetic" drives stress-ng in the guest (no Steam/Wine needed).
 # "game" drives a native GPU benchmark (vkmark/glmark2) under MangoHud in
 # the game rootfs built by scripts/setup-game-rootfs.sh.
+# "steam" drives a real Steam title under weston-headless in the steam
+# rootfs built by scripts/setup-steam-rootfs.sh.
 mode = "synthetic"
 benchmark_args = ["--cpu", "2"]
 benchmark_duration_secs = 30
 # Native benchmark used when mode = "game": "vkmark" or "glmark2".
 game_benchmark = "vkmark"
+# Steam app measured when mode = "steam". 570 = Dota 2.
+steam_app_id = 570
 runs_per_phase = 5
 warmup_runs = 1
 significance_threshold = 0.05

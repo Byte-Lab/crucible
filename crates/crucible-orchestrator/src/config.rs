@@ -73,6 +73,10 @@ pub struct MeasurementConfig {
     /// `"glmark2"`. The guest agent allow-lists these. Ignored otherwise.
     #[serde(default = "default_game_benchmark")]
     pub game_benchmark: String,
+    /// Steam app id measured when `mode = "steam"` (milestone G3).
+    /// Default 570 = Dota 2 (free license, native Linux, Vulkan).
+    #[serde(default = "default_steam_app_id")]
+    pub steam_app_id: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -185,6 +189,9 @@ fn default_benchmark_duration() -> u32 {
 fn default_game_benchmark() -> String {
     "vkmark".to_string()
 }
+fn default_steam_app_id() -> u32 {
+    570
+}
 fn default_model() -> String {
     "claude-sonnet-4-20250514".to_string()
 }
@@ -220,6 +227,7 @@ impl Default for MeasurementConfig {
             benchmark_args: default_benchmark_args(),
             benchmark_duration_secs: default_benchmark_duration(),
             game_benchmark: default_game_benchmark(),
+            steam_app_id: default_steam_app_id(),
         }
     }
 }

@@ -37,6 +37,40 @@ Respond with JSON: {"fps_avg": <float>, "fps_p1": <float>, "frame_time_p99_ms": 
                 msg = f"Hypothesis: {hypothesis}\n" + msg
             return msg
 
+        steam_app_id = context.get("steam_app_id")
+        if workload_kind == "steam" and steam_app_id:
+            duration = int(context.get("duration_secs") or 60)
+            mangohud_output = context.get(
+                "mangohud_output", "/tmp/crucible_mangohud.csv"
+            )
+            # v1 measures uncapped main-menu rendering (-novid skips the
+            # intro video); demo-driven timedemo passes land once a demo
+            # file ships in the rootfs.
+            args = ["-novid"]
+            msg = (
+                f"Collect {phase} measurements from the Steam title.\n"
+                f"1. Call launch_steam_benchmark(app_id={steam_app_id}, "
+                f"args={args!r}, mangohud_output={mangohud_output!r}, "
+                f"duration_secs={duration}) exactly once. It launches the "
+                "game under weston-headless + MangoHud and blocks until the "
+                "frame log is complete (game load can take minutes).\n"
+                f"2. Call fetch_mangohud_log(log_path={mangohud_output!r}) to "
+                "retrieve frame statistics.\n"
+                "Then emit the final JSON object from the system prompt with:\n"
+                "  fps_avg = fps_avg from fetch_mangohud_log\n"
+                "  fps_p1 = fps_p1 from fetch_mangohud_log\n"
+                "  frame_time_p99_ms = frametime_p99_ms from fetch_mangohud_log\n"
+                "  psi_cpu_avg = psi_cpu_delta from launch_steam_benchmark\n"
+                "  psi_memory_avg = psi_memory_delta from launch_steam_benchmark\n"
+                f'Set collection_paths to {{"mangohud": {mangohud_output!r}}}.\n'
+                "If either tool returns an error or log_found is false, do "
+                "NOT invent metrics and do NOT emit zeros: respond with "
+                '{"error": "<what failed and the exact tool error>"} instead.'
+            )
+            if hypothesis:
+                msg = f"Hypothesis: {hypothesis}\n" + msg
+            return msg
+
         benchmark = context.get("game_benchmark")
         if benchmark:
             duration = int(context.get("duration_secs") or 30)

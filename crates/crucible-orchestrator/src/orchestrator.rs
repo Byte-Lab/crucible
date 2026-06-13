@@ -89,6 +89,11 @@ pub fn measurement_context(
         context["mangohud_output"] = serde_json::json!(GUEST_MANGOHUD_OUTPUT);
         context["duration_secs"] =
             serde_json::json!(config.measurement.benchmark_duration_secs);
+    } else if config.measurement.mode == "steam" {
+        context["steam_app_id"] = serde_json::json!(config.measurement.steam_app_id);
+        context["mangohud_output"] = serde_json::json!(GUEST_MANGOHUD_OUTPUT);
+        context["duration_secs"] =
+            serde_json::json!(config.measurement.benchmark_duration_secs);
     } else {
         context["benchmark_args"] = serde_json::json!(config.measurement.benchmark_args);
         context["duration_secs"] =
@@ -424,12 +429,17 @@ impl Orchestrator {
             .map_err(|e| anyhow::anyhow!(e))?;
         tracing::info!(state = %self.state_machine.state(), "cycle state transition");
 
-        let game_context = serde_json::json!({
+        let mut game_context = serde_json::json!({
             "action": "select_game",
             // Lets the selector pivot to native OSS benchmarks (vkmark/
-            // glmark2) when game mode runs on a rootfs with no Steam library.
+            // glmark2) when game mode runs on a rootfs with no Steam
+            // library, or to the configured Steam title in steam mode.
             "workload_kind": self.config.measurement.mode,
         });
+        if self.config.measurement.mode == "steam" {
+            game_context["steam_app_id"] =
+                serde_json::json!(self.config.measurement.steam_app_id);
+        }
         let game_result = self.run_agent(AgentName::GameSelector, game_context).await?;
         let game_info = parse_agent_response(&game_result);
 
