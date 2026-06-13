@@ -53,6 +53,19 @@ GUEST_FILE_ALLOWED_PREFIXES = ("/tmp/", "/var/log/crucible/")
 # finishes in a couple of minutes; anything past this is hung.
 LAUNCH_BENCHMARK_TIMEOUT_SECS = 600
 
+# --- Steam benchmark (milestone G3) ----------------------------------------
+# Verified on RDNA3 passthrough (G3.0 spike): weston headless with the GL
+# renderer + Xwayland gives Steam titles the X11 path they expect, and
+# MangoHud hooks the present chain through Xwayland.
+STEAM_USER = "crucible"
+STEAM_HOME = f"/home/{STEAM_USER}"
+WESTON_ARGV = ["weston", "--backend=headless", "--renderer=gl", "--xwayland"]
+XDG_RUNTIME_DIR = "/run/crucible-xdg"
+# Game startup (Steam client boot + game load) happens before MangoHud's
+# log window even starts; the CSV wait budget is duration + this grace.
+STEAM_LAUNCH_GRACE_SECS = 180
+WESTON_WARMUP_SECS = 6
+
 
 # ---------------------------------------------------------------------------
 # Wire protocol helpers
@@ -311,18 +324,40 @@ class GuestAgentHandler:
             "raw_stderr_tail": stderr_tail,
         })
 
-    def _handle_launch_benchmark(self, cmd: GuestCommand) -> GuestResponse:
-        name = cmd.name or ""
-        if name not in NATIVE_BENCHMARKS:
-            return GuestResponse.error(
-                f"unsupported benchmark: {name!r} (allowed: {', '.join(NATIVE_BENCHMARKS)})"
+    def _ensure_gpu_module(self) -> None:
+        """Load amdgpu and wait briefly for the render node.
+
+        vng --exec boots the agent directly: no systemd, no udev coldplug,
+        so nothing auto-loads the GPU driver for a passed-through device.
+        Idempotent; failure is tolerated (no GPU → llvmpipe still renders
+        via the headless winsys). amdgpu's probe of a real GPU takes
+        seconds; without the wait Vulkan silently enumerates llvmpipe.
+        """
+        try:
+            subprocess.run(
+                ["modprobe", "amdgpu"],
+                capture_output=True,
+                timeout=60,
+                check=False,
             )
+            for _ in range(20):
+                if glob.glob("/dev/dri/renderD*"):
+                    break
+                time.sleep(0.5)
+        except Exception:
+            pass
+
+    def _validated_mangohud_output(
+        self, cmd: GuestCommand
+    ) -> GuestResponse | tuple[Path, Path]:
+        """Validate cmd.mangohud_output; (output_path, output_dir) or error.
+
+        Write-side counterpart of the fetch_file read guard: this path is
+        mkdir'd and rename-targeted, so an unrestricted value is an
+        arbitrary file write. Resolve symlinks/.. before checking.
+        """
         if not cmd.mangohud_output:
             return GuestResponse.error("mangohud_output is required")
-
-        # Write-side counterpart of the fetch_file read guard: this path is
-        # mkdir'd and rename-targeted, so an unrestricted value is an
-        # arbitrary file write. Resolve symlinks/.. before checking.
         resolved_output = os.path.realpath(cmd.mangohud_output)
         if not any(
             resolved_output.startswith(p) for p in GUEST_FILE_ALLOWED_PREFIXES
@@ -343,6 +378,18 @@ class GuestAgentHandler:
             output_dir.mkdir(parents=True, exist_ok=True)
         except OSError as exc:
             return GuestResponse.error(f"cannot create output dir: {exc}")
+        return output_path, output_dir
+
+    def _handle_launch_benchmark(self, cmd: GuestCommand) -> GuestResponse:
+        name = cmd.name or ""
+        if name not in NATIVE_BENCHMARKS:
+            return GuestResponse.error(
+                f"unsupported benchmark: {name!r} (allowed: {', '.join(NATIVE_BENCHMARKS)})"
+            )
+        validated = self._validated_mangohud_output(cmd)
+        if isinstance(validated, GuestResponse):
+            return validated
+        output_path, output_dir = validated
 
         # MangoHud has no fixed-output-file option: it writes
         # <app>_<timestamp>.csv into output_folder. Snapshot the folder
@@ -365,26 +412,7 @@ class GuestAgentHandler:
             ),
         })
 
-        # vng --exec boots the agent directly: no systemd, no udev coldplug,
-        # so nothing auto-loads the GPU driver for a passed-through device.
-        # Idempotent; failure is tolerated (no GPU → llvmpipe still renders
-        # via the headless winsys).
-        try:
-            subprocess.run(
-                ["modprobe", "amdgpu"],
-                capture_output=True,
-                timeout=60,
-                check=False,
-            )
-            # amdgpu's probe of a real GPU takes seconds; give the render
-            # node a moment to appear so Vulkan enumerates RADV instead of
-            # silently falling back to llvmpipe.
-            for _ in range(20):
-                if glob.glob("/dev/dri/renderD*"):
-                    break
-                time.sleep(0.5)
-        except Exception:
-            pass
+        self._ensure_gpu_module()
 
         psi_pre = _read_system_psi_avg10()
         try:
@@ -436,6 +464,143 @@ class GuestAgentHandler:
             "psi_io_delta": delta("io"),
             "stdout_tail": "\n".join((proc.stdout or "").splitlines()[-20:]),
             "stderr_tail": "\n".join((proc.stderr or "").splitlines()[-20:]),
+        })
+
+    def _ensure_weston(self) -> GuestResponse | dict[str, str]:
+        """Start weston headless (idempotent) and return the client env.
+
+        Recipe verified on RDNA3 passthrough: headless backend + GL
+        renderer + Xwayland; clients reach it via WAYLAND_DISPLAY/DISPLAY
+        inside a private XDG_RUNTIME_DIR.
+        """
+        client_env = {
+            "XDG_RUNTIME_DIR": XDG_RUNTIME_DIR,
+            "WAYLAND_DISPLAY": "wayland-1",
+            "DISPLAY": ":0",
+        }
+        weston = getattr(self, "_weston_proc", None)
+        if weston is not None and weston.poll() is None:
+            return client_env
+        try:
+            os.makedirs(XDG_RUNTIME_DIR, mode=0o700, exist_ok=True)
+            os.chmod(XDG_RUNTIME_DIR, 0o700)
+        except OSError as exc:
+            return GuestResponse.error(f"cannot create XDG_RUNTIME_DIR: {exc}")
+        env = os.environ.copy()
+        env["XDG_RUNTIME_DIR"] = XDG_RUNTIME_DIR
+        try:
+            self._weston_proc = subprocess.Popen(
+                WESTON_ARGV,
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            return GuestResponse.error("weston binary not found")
+        time.sleep(WESTON_WARMUP_SECS)
+        if self._weston_proc.poll() is not None:
+            return GuestResponse.error(
+                f"weston exited immediately (code {self._weston_proc.returncode})"
+            )
+        return client_env
+
+    def _handle_launch_steam_benchmark(self, cmd: GuestCommand) -> GuestResponse:
+        if cmd.app_id is None:
+            return GuestResponse.error("app_id is required")
+        validated = self._validated_mangohud_output(cmd)
+        if isinstance(validated, GuestResponse):
+            return validated
+        output_path, output_dir = validated
+
+        self._ensure_gpu_module()
+        client_env = self._ensure_weston()
+        if isinstance(client_env, GuestResponse):
+            return client_env
+
+        duration = cmd.duration_secs or DEFAULT_LAUNCH_BENCHMARK_DURATION_SECS
+        log_duration = max(1, duration - 2)
+        env = os.environ.copy()
+        env.update(client_env)
+        env.update({
+            # runuser overrides HOME/USER for the target user, but be
+            # explicit: Steam derives all its paths from HOME.
+            "HOME": STEAM_HOME,
+            "USER": STEAM_USER,
+            "MANGOHUD": "1",
+            "MANGOHUD_CONFIG": (
+                f"output_folder={output_dir},autostart_log=1,"
+                f"log_duration={log_duration},log_interval=100"
+            ),
+        })
+
+        pre_existing = set(output_dir.glob("*.csv"))
+        psi_pre = _read_system_psi_avg10()
+
+        # steamcmd/steam refuse to run usefully as root (G3.0 spike:
+        # error 13 creating caches); the agent runs as root, so drop to
+        # the steam user. Steam stays resident after the game exits —
+        # fine, the VM is rebooted between kernel builds anyway.
+        argv = [
+            "runuser", "-u", STEAM_USER, "--",
+            "steam", "-applaunch", str(cmd.app_id), *(cmd.args or []),
+        ]
+        try:
+            steam_proc = subprocess.Popen(
+                argv,
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            return GuestResponse.error("runuser or steam binary not found")
+
+        # The CSV appears once MangoHud's log window closes; before that
+        # comes Steam boot + game load. Poll until the frame log exists
+        # and its size is stable across consecutive polls.
+        deadline = time.monotonic() + duration + STEAM_LAUNCH_GRACE_SECS
+        last_size = -1
+        frame_log: Path | None = None
+        while time.monotonic() < deadline:
+            candidates = sorted(
+                (
+                    p
+                    for p in set(output_dir.glob("*.csv")) - pre_existing
+                    if not p.name.endswith("_summary.csv")
+                ),
+                key=lambda p: p.stat().st_mtime,
+            )
+            if candidates:
+                size = candidates[-1].stat().st_size
+                if size > 0 and size == last_size:
+                    frame_log = candidates[-1]
+                    break
+                last_size = size
+            time.sleep(2)
+
+        psi_post = _read_system_psi_avg10()
+        if frame_log is None:
+            return GuestResponse.error(
+                f"no MangoHud log appeared within {duration + STEAM_LAUNCH_GRACE_SECS}s "
+                f"(steam pid {steam_proc.pid}, app {cmd.app_id})"
+            )
+        try:
+            frame_log.rename(output_path)
+        except OSError as exc:
+            return GuestResponse.error(f"cannot move MangoHud log: {exc}")
+
+        def delta(resource: str) -> float:
+            before = psi_pre.get(resource, 0.0)
+            after = psi_post.get(resource, 0.0)
+            return max(0.0, after - before)
+
+        return GuestResponse.ok({
+            "app_id": cmd.app_id,
+            "steam_pid": steam_proc.pid,
+            "mangohud_output": str(output_path),
+            "log_found": True,
+            "psi_cpu_delta": delta("cpu"),
+            "psi_memory_delta": delta("memory"),
+            "psi_io_delta": delta("io"),
         })
 
 
