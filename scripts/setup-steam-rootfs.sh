@@ -179,8 +179,11 @@ fi
 
 if [[ -n "$STEAM_LIBRARY" && -d "$STEAM_LIBRARY" ]]; then
     echo "[$SCRIPT_TAG] seeding Steam library from $STEAM_LIBRARY (may take a while)"
-    install -d "$TARGET/home/crucible/.local/share/Steam"
-    cp -a "$STEAM_LIBRARY" "$TARGET/home/crucible/.local/share/Steam/steamapps"
+    # The session seed above already created a steamapps/ dir (the host
+    # Steam carries one); copy the library's *contents* into it rather
+    # than the dir itself, or the game lands in steamapps/steamapps/.
+    install -d "$TARGET/home/crucible/.local/share/Steam/steamapps"
+    cp -a "$STEAM_LIBRARY/." "$TARGET/home/crucible/.local/share/Steam/steamapps/"
 fi
 
 chroot "$TARGET" chown -R crucible:crucible /home/crucible
