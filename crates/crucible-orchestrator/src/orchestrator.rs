@@ -139,6 +139,14 @@ pub fn measurement_context(
         context["benchmark_args"] = serde_json::json!(config.measurement.benchmark_args);
         context["duration_secs"] =
             serde_json::json!(config.measurement.benchmark_duration_secs);
+        // Synthetic mode also profiles: a kernel trace during the stress-ng
+        // run surfaces sched/memory-reclaim stalls the analyzer can act on.
+        if capture_perfetto {
+            context["capture_perfetto"] = serde_json::json!(true);
+            context["perfetto_output"] = serde_json::json!(GUEST_PERFETTO_OUTPUT);
+            context["perfetto_host_dir"] =
+                serde_json::json!(config.orchestrator.artifact_dir);
+        }
     }
     context
 }

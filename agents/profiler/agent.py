@@ -20,19 +20,45 @@ Respond with JSON: {"fps_avg": <float>, "fps_p1": <float>, "frame_time_p99_ms": 
         if workload_kind == "synthetic":
             args = context.get("benchmark_args", ["--cpu", "2"])
             duration = context.get("duration_secs", 30)
-            msg = (
-                f"Collect {phase} measurements via the synthetic CPU workload.\n"
-                f"Call run_benchmark(name='stress-ng', args={args!r}, "
-                f"duration_secs={duration}) exactly once. After it returns:\n"
-                "  fps_avg = 0.0\n"
-                "  fps_p1 = 0.0\n"
-                "  frame_time_p99_ms = 1000.0 / ops_per_sec when ops_per_sec > 0, "
-                "else 0.0\n"
-                "  psi_cpu_avg = psi_cpu_delta from the tool result\n"
-                "  psi_memory_avg = psi_memory_delta from the tool result\n"
-                "Emit only the final JSON object described in the system prompt; "
-                "set collection_paths to {} for synthetic runs."
+            capture_perfetto = bool(context.get("capture_perfetto"))
+            perfetto_output = context.get(
+                "perfetto_output", "/tmp/crucible_trace.perfetto-trace"
             )
+            perfetto_host_dir = context.get("perfetto_host_dir", "/tmp")
+            step = 1
+            lines = [f"Collect {phase} measurements via the synthetic workload."]
+            lines.append(
+                f"{step}. Call run_benchmark(name='stress-ng', args={args!r}, "
+                f"duration_secs={duration}) exactly once. This clean run is the "
+                "measurement."
+            )
+            step += 1
+            if capture_perfetto:
+                lines.append(
+                    f"{step}. Call start_profiling(duration_secs={duration + 20}, "
+                    f"output={perfetto_output!r}) then run_benchmark(name="
+                    f"'stress-ng', args={args!r}, duration_secs={duration}) again "
+                    "(discard its numbers), then stop_profiling(), then "
+                    f"fetch_perfetto_trace(trace_path={perfetto_output!r}, "
+                    f"host_output_dir={perfetto_host_dir!r})."
+                )
+                step += 1
+            collection = (
+                f'{{"traces": ["<host_path from fetch_perfetto_trace>"]}}'
+                if capture_perfetto else "{}"
+            )
+            lines.append(
+                "Then emit the final JSON from the system prompt with:\n"
+                "  fps_avg = 0.0\n  fps_p1 = 0.0\n"
+                "  frame_time_p99_ms = 1000.0 / ops_per_sec (clean run) when "
+                "ops_per_sec > 0, else 0.0\n"
+                "  psi_cpu_avg = psi_cpu_delta, psi_memory_avg = psi_memory_delta "
+                "from the clean run\n"
+                f"  collection_paths = {collection}\n"
+                "If run_benchmark errors, do NOT invent metrics: respond "
+                '{"error": "<the exact tool error>"}.'
+            )
+            msg = "\n".join(lines)
             if hypothesis:
                 msg = f"Hypothesis: {hypothesis}\n" + msg
             return msg
