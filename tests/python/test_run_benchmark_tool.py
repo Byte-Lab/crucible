@@ -79,8 +79,10 @@ def test_profiler_synthetic_user_message_instructs_run_benchmark():
         config=AgentConfig(model="m", max_tokens=1, timeout_seconds=1),
     )
     msg = ProfilerAgent().build_user_message(task)
-    assert "synthetic CPU workload" in msg
+    assert "synthetic workload" in msg
     assert "run_benchmark" in msg
     assert "stress-ng" in msg
     assert "duration_secs=15" in msg
     assert "psi_cpu_avg" in msg
+    # No capture_perfetto in context -> no profiling step for this baseline.
+    assert "start_profiling" not in msg
