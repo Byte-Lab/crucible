@@ -170,6 +170,36 @@ def test_apply_sysctls_rejects_traversal_keys():
     assert not os.path.exists("/etc/crucible_pwned")
 
 
+def test_apply_sysctls_accepts_allowed_sys_path(monkeypatch, tmp_path):
+    import guest.crucible_guest_agent as agent_mod
+
+    handler = agent_mod.GuestAgentHandler()
+    written = {}
+    real_open = open
+
+    def fake_open(path, *a, **k):
+        if isinstance(path, str) and path.startswith("/sys/"):
+            f = tmp_path / path.replace("/", "_")
+            if "w" in (a[0] if a else k.get("mode", "")):
+                written[path] = True
+            return real_open(f, *a, **k)
+        return real_open(path, *a, **k)
+
+    import builtins
+    monkeypatch.setattr(builtins, "open", fake_open)
+    # realpath of an allowed prefix passes; a random /sys path is rejected.
+    monkeypatch.setattr(
+        agent_mod.os.path, "realpath", lambda p: p
+    )
+    resp = handler.handle(GuestCommand(cmd="apply_sysctls", config={"sysctls": {
+        "/sys/kernel/mm/transparent_hugepage/enabled": "always",
+        "/sys/firmware/evil": "x",
+    }}))
+    assert resp.status == "ok"
+    assert "/sys/kernel/mm/transparent_hugepage/enabled" in resp.data["applied"]
+    assert "/sys/firmware/evil" in resp.data["failed"]
+
+
 def test_handle_unknown_command():
     from guest.crucible_guest_agent import GuestAgentHandler
 

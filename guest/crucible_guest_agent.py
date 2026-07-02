@@ -143,6 +143,13 @@ PERFETTO_DAEMON_WARMUP_SECS = 2
 # Dotted sysctl names only — the apply_sysctls guard against traversal
 # out of /proc/sys (keys arrive from the optimizer's model output).
 _SYSCTL_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$")
+# High-impact tunables that live under /sys, not /proc/sys: transparent
+# hugepages, memory-management knobs, and CPU frequency governor. The
+# apply_sysctls guard confines writes to these prefixes.
+_SYS_TUNABLE_PREFIXES = (
+    "/sys/kernel/mm/",
+    "/sys/devices/system/cpu/",
+)
 
 
 def _has_default_route(route_path: str = "/proc/net/route") -> bool:
@@ -230,16 +237,31 @@ class GuestAgentHandler:
         applied: dict[str, str] = {}
         failed: dict[str, str] = {}
         for key, value in sysctls.items():
-            # The key comes from the optimizer's model output over vsock —
-            # same trust level as fetch_file paths. Without this guard a
-            # key like "a/../../etc/x" walks out of /proc/sys into an
-            # arbitrary file write.
-            if not isinstance(key, str) or not _SYSCTL_KEY_RE.match(key):
+            # Keys come from the optimizer's model output over vsock — same
+            # trust level as fetch_file paths. Two forms are accepted:
+            #   - dotted /proc/sys knob (kernel.x, vm.y)
+            #   - an explicit tunable path under the /sys tuning allow-list
+            #     (THP, CPU governor, etc. — the high-impact knobs that are
+            #     NOT in /proc/sys).
+            # Both are guarded against path traversal.
+            if not isinstance(key, str):
                 failed[str(key)] = "invalid sysctl key"
                 continue
-            path = "/proc/sys/" + key.replace(".", "/")
-            if not os.path.realpath(path).startswith("/proc/sys/"):
-                failed[key] = "path escapes /proc/sys"
+            if key.startswith("/sys/"):
+                path = key
+                if not any(
+                    os.path.realpath(path).startswith(p)
+                    for p in _SYS_TUNABLE_PREFIXES
+                ):
+                    failed[key] = "path not under an allowed /sys tuning prefix"
+                    continue
+            elif _SYSCTL_KEY_RE.match(key):
+                path = "/proc/sys/" + key.replace(".", "/")
+                if not os.path.realpath(path).startswith("/proc/sys/"):
+                    failed[key] = "path escapes /proc/sys"
+                    continue
+            else:
+                failed[key] = "invalid sysctl key"
                 continue
             try:
                 with open(path, "w", encoding="ascii") as f:

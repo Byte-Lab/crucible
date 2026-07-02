@@ -75,7 +75,19 @@ Respond with JSON only (no prose, no fences):
                 "kernel work), kernel.sched_cfs_bandwidth_slice_us raised to "
                 "10000-20000 (fewer bandwidth reschedules). Change ONE or TWO "
                 "high-impact knobs per attempt so the effect is attributable, and "
-                "pick ones the trace's bottleneck actually implicates."
+                "pick ones the trace's bottleneck actually implicates.\n"
+                "For a MEMORY-bound bottleneck the highest-impact tuning is "
+                "Transparent Huge Pages: set key "
+                '"/sys/kernel/mm/transparent_hugepage/enabled" to "always" '
+                "(large, reliable throughput gain for anonymous-memory workloads "
+                "vs the madvise/never default). Related high-impact /sys knobs: "
+                '"/sys/kernel/mm/transparent_hugepage/defrag" = "always", '
+                '"/sys/kernel/mm/transparent_hugepage/khugepaged/defrag" = "1". '
+                "For a CPU-bound bottleneck, "
+                '"/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor" = '
+                '"performance" (if present). These /sys tunables are accepted by '
+                "apply_sysctls exactly like /proc/sys keys — use the full path as "
+                "the key. Prefer a /sys high-impact knob when the bottleneck fits."
             )
         return msg
 
