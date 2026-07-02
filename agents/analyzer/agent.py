@@ -13,11 +13,28 @@ Respond with JSON: {"bottleneck": "<subsystem>", "severity": "high|medium|low", 
     def build_user_message(self, task: TaskEnvelope) -> str:
         context = task.context
         game = context.get("game_name", "unknown")
+        workload_kind = context.get("workload_kind", "game")
+        workload_args = context.get("workload_args") or []
         metrics = context.get("metrics", {})
         trace_paths = context.get("trace_paths", [])
         attempt = context.get("attempt_number", 1)
         previous_attempts = context.get("previous_attempts", [])
-        msg = f"Analyze profiling data for {game} (attempt {attempt}).\n"
+        if workload_kind == "synthetic":
+            msg = (
+                f"Analyze profiling data for a SYNTHETIC workload: "
+                f"`stress-ng {' '.join(map(str, workload_args))}` (attempt {attempt}).\n"
+                "This is NOT a game. There are deliberately no wine/proton/"
+                "gamescope threads — do NOT treat their absence as a failed or "
+                "empty capture. The workload itself (the stress-ng worker "
+                "threads) plus the kernel threads it exercises (e.g. kcompactd, "
+                "khugepaged, kswapd, rcu_*, ksoftirqd) ARE the signal. Identify "
+                "the kernel subsystem bottleneck the trace implicates — for a "
+                "--vm memory workload that is the mm subsystem (page allocation, "
+                "compaction, THP collapse, reclaim). Name the specific kernel "
+                "source area (file/function) an optimization should target.\n"
+            )
+        else:
+            msg = f"Analyze profiling data for {game} (attempt {attempt}).\n"
         if metrics:
             msg += f"Metrics:\n{json.dumps(metrics, indent=2)}\n"
         if trace_paths:

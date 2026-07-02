@@ -687,6 +687,11 @@ impl Orchestrator {
                 "cycle_id": cycle_id,
                 "metrics": baseline_metrics,
                 "attempt_number": attempt_number,
+                // Tell the analyzer what the workload actually is, so it does
+                // not mistake a synthetic stress-ng trace (mm/RCU/kcompactd
+                // threads, no game) for a failed game capture.
+                "workload_kind": self.config.measurement.mode,
+                "workload_args": self.config.measurement.benchmark_args,
             });
             // The profiled baseline run leaves a Perfetto kernel trace on
             // the host; hand it to the analyzer so bottleneck hunting is
