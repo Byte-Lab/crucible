@@ -493,6 +493,20 @@ impl Orchestrator {
         let psi_cpu_avg = json_f64(&parsed, "psi_cpu_avg");
         let psi_memory_avg = json_f64(&parsed, "psi_memory_avg");
 
+        // A valid run always yields a positive frame time (synthetic derives
+        // it from ops/sec, game from the MangoHud percentile). A zero means
+        // the benchmark produced no metrics that run (e.g. an intermittent
+        // stress-ng miss returning ops/sec = 0). Recording it as a real
+        // sample poisons the phase mean and variance — one 0.0 in a set of
+        // 0.0039 fabricated a spurious -10% delta with 33% CV. Reject it as a
+        // failed sample so measure_phase collects only clean data points.
+        if !(frame_time_p99_ms > 0.0) {
+            anyhow::bail!(
+                "profiler {phase} sample has non-positive frame_time_p99_ms \
+                 ({frame_time_p99_ms}); treating as a failed run"
+            );
+        }
+
         let id = self.db.insert_measurement(
             cycle_id,
             phase,
@@ -1168,7 +1182,10 @@ mod tests {
         let orch = Orchestrator::new(config, db, runner);
 
         let cycle_id = orch.db.create_cycle("test_game", 12345).unwrap();
-        let agent_result = serde_json::json!({"response": "{\"fps_avg\": 60.0}"});
+        // frame_time_p99_ms must be positive (the validity gate); the other
+        // unspecified fields (psi_*) still default to 0.
+        let agent_result =
+            serde_json::json!({"response": "{\"fps_avg\": 60.0, \"frame_time_p99_ms\": 16.6}"});
         orch.persist_measurement(cycle_id, "baseline", &agent_result)
             .unwrap();
 
@@ -1176,6 +1193,49 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert!((rows[0].fps_avg - 60.0).abs() < f64::EPSILON);
         assert_eq!(rows[0].psi_cpu_avg, 0.0);
+    }
+
+    #[test]
+    fn persist_measurement_rejects_zero_frame_time_as_failed_run() {
+        use crate::agent_runner::AgentRunner;
+        use crate::config::CrucibleConfig;
+        use crate::db::Database;
+        use std::path::PathBuf;
+        use std::time::Duration;
+
+        let toml_str = r#"
+            [orchestrator]
+            db_path = "/tmp/crucible-test3.db"
+            artifact_dir = "/tmp/crucible-artifacts"
+            [vm]
+            kernel_src = "/tmp/k"
+            guest_rootfs = "/tmp/r"
+            vfio_device = "00:00.0"
+            [measurement]
+            [agents]
+        "#;
+        let config: CrucibleConfig = toml::from_str(toml_str).unwrap();
+        let db = Database::open_in_memory().unwrap();
+        let runner = AgentRunner::new(
+            PathBuf::from("python3"),
+            PathBuf::from("/tmp"),
+            Duration::from_secs(1),
+            std::env::temp_dir(),
+        );
+        let orch = Orchestrator::new(config, db, runner);
+        let cycle_id = orch.db.create_cycle("test_game", 1).unwrap();
+        // A run that produced no metrics: synthetic emits frame_time_p99_ms
+        // = 0.0 when ops/sec came back 0. It must be rejected, not stored.
+        let agent_result = serde_json::json!(
+            {"response": "{\"fps_avg\": 0.0, \"frame_time_p99_ms\": 0.0}"}
+        );
+        assert!(orch
+            .persist_measurement(cycle_id, "baseline", &agent_result)
+            .is_err());
+        assert_eq!(
+            orch.db.get_measurements(cycle_id, "baseline").unwrap().len(),
+            0
+        );
     }
 
     fn make_orchestrator() -> Orchestrator {
