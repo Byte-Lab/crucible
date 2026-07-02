@@ -287,21 +287,39 @@ class GuestAgentHandler:
             return None
         started = []
         for binary in ("traced", "traced_probes"):
+            log_path = f"/tmp/crucible_{binary}.log"
             try:
+                log_file = open(log_path, "wb")
                 started.append(
                     subprocess.Popen(
                         [binary],
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
+                        stdout=log_file,
+                        stderr=subprocess.STDOUT,
                     )
                 )
             except FileNotFoundError:
                 return GuestResponse.error(f"{binary} not found in guest")
+            except OSError as exc:
+                return GuestResponse.error(f"cannot start {binary}: {exc}")
         self._perfetto_daemons = started
         time.sleep(PERFETTO_DAEMON_WARMUP_SECS)
-        dead = [p.args for p in started if p.poll() is not None]
+        dead = [p for p in started if p.poll() is not None]
         if dead:
-            return GuestResponse.error(f"perfetto daemon(s) exited at start: {dead}")
+            # Surface each dead daemon's captured output — a DEVNULL here
+            # already cost one blind debugging cycle.
+            details = []
+            for p in dead:
+                name = p.args[0] if isinstance(p.args, list) else str(p.args)
+                tail = ""
+                try:
+                    with open(f"/tmp/crucible_{name}.log", "rb") as f:
+                        tail = f.read()[-500:].decode("utf-8", errors="replace")
+                except OSError:
+                    pass
+                details.append(f"{name} (exit {p.returncode}): {tail.strip()}")
+            return GuestResponse.error(
+                "perfetto daemon(s) exited at start: " + " | ".join(details)
+            )
         return None
 
     def _handle_start_profiling(self, cmd: GuestCommand) -> GuestResponse:
@@ -315,21 +333,23 @@ class GuestAgentHandler:
             return daemon_error
         # `perfetto -c -` reads a text-proto config from stdin; without one
         # it records nothing. Feed the kernel-scheduling config (overridable
-        # via config["trace_config"] for a custom capture). `--time` bounds
-        # the capture so a lost stop_profiling can't leave it running.
+        # via config["trace_config"] for a custom capture). The CLI rejects
+        # -c together with --time, so the capture bound (protecting against
+        # a lost stop_profiling) is a duration_ms line inside the config.
         trace_config = config.get("trace_config", PERFETTO_KERNEL_CONFIG)
+        trace_config = f"duration_ms: {int(duration) * 1000}\n" + trace_config
         try:
+            client_log = open("/tmp/crucible_perfetto.log", "wb")
             proc = subprocess.Popen(
                 [
                     "perfetto",
                     "--txt",
                     "-c", "-",
                     "-o", output,
-                    "--time", str(duration),
                 ],
                 stdin=subprocess.PIPE,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=client_log,
+                stderr=subprocess.STDOUT,
             )
         except FileNotFoundError:
             return GuestResponse.error("perfetto binary not found")

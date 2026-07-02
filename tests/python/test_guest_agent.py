@@ -81,16 +81,17 @@ def test_start_profiling_feeds_kernel_config_to_perfetto(monkeypatch):
     # CLI is only a consumer of the traced service socket.
     assert [p.args[0] for p in popens] == ["traced", "traced_probes", "perfetto"]
     # perfetto reads the config from stdin; without this write it records
-    # nothing. The kernel scheduling events must be present.
+    # nothing. The kernel scheduling events must be present, and the
+    # capture bound rides in the config (the CLI rejects -c with --time).
     perfetto_proc = popens[-1]
     written = perfetto_proc.stdin.written.decode()
+    assert written.startswith("duration_ms: 12000")
     assert "sched/sched_switch" in written
     assert "sched/sched_wakeup" in written
     assert "linux.ftrace" in written
     assert perfetto_proc.stdin.closed is True
     assert perfetto_proc.args[:2] == ["perfetto", "--txt"]
-    assert "--time" in perfetto_proc.args
-    assert "12" in perfetto_proc.args
+    assert "--time" not in perfetto_proc.args
 
 
 def test_start_profiling_missing_perfetto_binary(monkeypatch):
