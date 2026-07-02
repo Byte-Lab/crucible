@@ -365,15 +365,26 @@ class GuestAgentHandler:
         return GuestResponse.ok({"pid": proc.pid, "output": output})
 
     def _handle_stop_profiling(self, cmd: GuestCommand) -> GuestResponse:
+        # SIGTERM makes the perfetto client end the capture and WRITE the
+        # trace file (it only materializes at capture end). Wait for the
+        # client to actually exit so the flush is complete before the host
+        # fetches. -x avoids TERMing traced/traced_probes or ourselves.
         try:
-            subprocess.run(["pkill", "-f", "perfetto"], check=False)
+            subprocess.run(["pkill", "-x", "perfetto"], check=False)
         except FileNotFoundError:
             pass
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline:
+            probe = subprocess.run(["pgrep", "-x", "perfetto"], capture_output=True)
+            if probe.returncode != 0:
+                break
+            time.sleep(0.5)
 
         trace_dir = Path("/tmp")
         traces = sorted(trace_dir.glob("crucible_trace*.perfetto-trace"))
         paths = [str(t) for t in traces]
-        return GuestResponse.ok({"traces": paths})
+        sizes = {str(t): t.stat().st_size for t in traces}
+        return GuestResponse.ok({"traces": paths, "sizes": sizes})
 
     def _handle_capture_screen(self, cmd: GuestCommand) -> GuestResponse:
         config = cmd.config or {}

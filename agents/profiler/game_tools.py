@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import os
+import time
 from typing import Any
 
 from agents.common.tool_registry import ToolRegistry
@@ -128,16 +129,29 @@ def make_profiler_game_tools(registry: ToolRegistry, guest_rpc: Any) -> None:
                 "status": "dry_run",
                 "message": f"Would fetch {trace_path} from guest (no guest RPC)",
             }
-        try:
-            resp = guest_rpc.call("fetch_file", {"path": trace_path})
-        except Exception as exc:
-            return {"status": "error", "error": str(exc)}
-        if resp.get("status") != "ok":
-            return {"status": "error", "error": resp.get("message", "fetch_file failed")}
-        data = resp.get("data", {})
-        contents_b64 = data.get("contents_b64")
+        # perfetto writes the trace only when the capture ends; if the fetch
+        # races the flush the file is briefly absent/empty. Retry a few
+        # times before declaring failure.
+        contents_b64 = None
+        data: dict[str, Any] = {}
+        last_error = "guest returned no trace contents"
+        for attempt in range(4):
+            if attempt:
+                time.sleep(3)
+            try:
+                resp = guest_rpc.call("fetch_file", {"path": trace_path})
+            except Exception as exc:
+                last_error = str(exc)
+                continue
+            if resp.get("status") != "ok":
+                last_error = resp.get("message", "fetch_file failed")
+                continue
+            data = resp.get("data", {})
+            contents_b64 = data.get("contents_b64")
+            if contents_b64:
+                break
         if not contents_b64:
-            return {"status": "error", "error": "guest returned no trace contents"}
+            return {"status": "error", "error": last_error}
         blob = base64.b64decode(contents_b64)
         host_path = os.path.join(host_output_dir, os.path.basename(trace_path))
         try:

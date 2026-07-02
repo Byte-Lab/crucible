@@ -122,6 +122,12 @@ Respond with JSON: {"fps_avg": <float>, "fps_p1": <float>, "frame_time_p99_ms": 
                 )
                 step += 1
                 lines.append(
+                    f"{step}. Call stop_profiling() — perfetto only writes the "
+                    "trace file when the capture ends, and the window outlives "
+                    "the benchmark."
+                )
+                step += 1
+                lines.append(
                     f"{step}. Call fetch_perfetto_trace(trace_path={perfetto_output!r}, "
                     f"host_output_dir={perfetto_host_dir!r}) to pull the kernel "
                     "trace to the host."
