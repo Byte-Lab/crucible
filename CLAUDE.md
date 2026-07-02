@@ -40,6 +40,23 @@ nodes), a memlock limit ≥ guest RAM for the orchestrator process
 existing (QEMU dies instantly on the missing 9p fsdev dir if a cache
 cleaner removed it).
 
+Getting that pid safely: **never `pgrep -f crucible-orchestrator`** — the
+pattern matches the shell that runs the pgrep itself (the config path is on
+your own command line), so prlimit silently lands on the wrong process and
+QEMU later dies with `vfio_container_dma_map ... = -12 (Cannot allocate
+memory)`. Use the exact comm name (15-char truncated) and verify the effect
+on the target, not the prlimit exit status:
+
+```bash
+pid=$(pgrep -x crucible-orches | head -1)
+sudo prlimit --pid "$pid" --memlock=unlimited
+grep -i "max locked" /proc/$pid/limits   # must say unlimited
+```
+
+The permanent alternative (survives reboots, removes the race entirely) is a
+`/etc/security/limits.d/` entry raising memlock for the login user — see the
+note `scripts/setup-host.sh` prints.
+
 Build the guest rootfs images (mmdebstrap; both share `scripts/lib/rootfs-common.sh`):
 
 ```bash
