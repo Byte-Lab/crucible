@@ -38,6 +38,76 @@ def test_handle_get_metrics():
     assert "system_psi" in resp.data
 
 
+def test_start_profiling_feeds_kernel_config_to_perfetto(monkeypatch):
+    import guest.crucible_guest_agent as agent_mod
+
+    handler = agent_mod.GuestAgentHandler()
+    monkeypatch.setattr(agent_mod.time, "sleep", lambda s: None)
+
+    class FakeStdin:
+        def __init__(self):
+            self.written = b""
+            self.closed = False
+
+        def write(self, b):
+            self.written += b
+
+        def close(self):
+            self.closed = True
+
+    class FakeProc:
+        def __init__(self, argv):
+            self.args = argv
+            self.pid = 4321
+            self.stdin = FakeStdin()
+
+        def poll(self):
+            return None
+
+    popens = []
+
+    def fake_popen(argv, **kwargs):
+        proc = FakeProc(argv)
+        popens.append(proc)
+        return proc
+
+    monkeypatch.setattr(agent_mod.subprocess, "Popen", fake_popen)
+    resp = handler.handle(
+        GuestCommand(cmd="start_profiling", config={"duration_s": 12})
+    )
+    assert resp.status == "ok"
+    assert resp.data["pid"] == 4321
+    # traced + traced_probes must be up before the perfetto client — the
+    # CLI is only a consumer of the traced service socket.
+    assert [p.args[0] for p in popens] == ["traced", "traced_probes", "perfetto"]
+    # perfetto reads the config from stdin; without this write it records
+    # nothing. The kernel scheduling events must be present.
+    perfetto_proc = popens[-1]
+    written = perfetto_proc.stdin.written.decode()
+    assert "sched/sched_switch" in written
+    assert "sched/sched_wakeup" in written
+    assert "linux.ftrace" in written
+    assert perfetto_proc.stdin.closed is True
+    assert perfetto_proc.args[:2] == ["perfetto", "--txt"]
+    assert "--time" in perfetto_proc.args
+    assert "12" in perfetto_proc.args
+
+
+def test_start_profiling_missing_perfetto_binary(monkeypatch):
+    import guest.crucible_guest_agent as agent_mod
+
+    handler = agent_mod.GuestAgentHandler()
+    monkeypatch.setattr(agent_mod.time, "sleep", lambda s: None)
+
+    def raise_fnf(*a, **k):
+        raise FileNotFoundError
+
+    monkeypatch.setattr(agent_mod.subprocess, "Popen", raise_fnf)
+    resp = handler.handle(GuestCommand(cmd="start_profiling"))
+    assert resp.status == "error"
+    assert "traced" in resp.message or "perfetto" in resp.message
+
+
 def test_handle_unknown_command():
     from guest.crucible_guest_agent import GuestAgentHandler
 

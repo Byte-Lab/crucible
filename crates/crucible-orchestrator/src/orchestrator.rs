@@ -63,6 +63,9 @@ pub fn build_task_envelope(
 /// Guest-side path where the launch_benchmark handler deposits the MangoHud
 /// frame-time CSV. The profiler fetches it back over vsock after the run.
 pub const GUEST_MANGOHUD_OUTPUT: &str = "/tmp/crucible_mangohud.csv";
+/// Guest path for the Perfetto kernel trace captured during the
+/// comparison-phase run (fetched to the artifact dir for the analyzer).
+pub const GUEST_PERFETTO_OUTPUT: &str = "/tmp/crucible_trace.perfetto-trace";
 
 /// Build the profiler `TaskEnvelope.context` for a measurement phase.
 /// Shared by the baseline and comparison dispatch sites so the synthetic
@@ -89,6 +92,18 @@ pub fn measurement_context(
         context["mangohud_output"] = serde_json::json!(GUEST_MANGOHUD_OUTPUT);
         context["duration_secs"] =
             serde_json::json!(config.measurement.benchmark_duration_secs);
+        if phase == "baseline" {
+            // After the clean measurement run, the profiler repeats the
+            // workload once more under a Perfetto kernel-scheduler trace.
+            // Analyze runs BEFORE ComparisonMeasurement, so the trace must
+            // exist by the end of the baseline phase to inform this cycle's
+            // patch; the clean run stays unprofiled so tracing overhead
+            // can't skew the measured numbers.
+            context["capture_perfetto"] = serde_json::json!(true);
+            context["perfetto_output"] = serde_json::json!(GUEST_PERFETTO_OUTPUT);
+            context["perfetto_host_dir"] =
+                serde_json::json!(config.orchestrator.artifact_dir);
+        }
     } else if config.measurement.mode == "steam" {
         context["steam_app_id"] = serde_json::json!(config.measurement.steam_app_id);
         context["mangohud_output"] = serde_json::json!(GUEST_MANGOHUD_OUTPUT);
@@ -530,6 +545,17 @@ impl Orchestrator {
                 "metrics": baseline_metrics,
                 "attempt_number": attempt_number,
             });
+            // The profiled baseline repeat leaves a Perfetto kernel trace on
+            // the host (collection_paths.traces); hand it to the analyzer so
+            // bottleneck hunting is grounded in scheduler data, not just the
+            // summary metrics.
+            if let Some(traces) = baseline_metrics
+                .get("collection_paths")
+                .and_then(|c| c.get("traces"))
+                .filter(|t| t.is_array())
+            {
+                analyze_context["trace_paths"] = traces.clone();
+            }
             if !previous_attempts.is_empty() {
                 analyze_context["previous_attempts"] =
                     serde_json::Value::Array(previous_attempts.clone());
@@ -1139,6 +1165,15 @@ mod tests {
             ctx["duration_secs"],
             serde_json::json!(config.measurement.benchmark_duration_secs)
         );
+        // Analyze runs before ComparisonMeasurement, so the Perfetto trace
+        // is captured during the BASELINE phase (as a separate profiled
+        // repeat after the clean run) — not during comparison.
+        assert!(ctx.get("capture_perfetto").is_none());
+
+        let baseline_ctx = measurement_context(&config, "baseline", "vkmark");
+        assert_eq!(baseline_ctx["capture_perfetto"], serde_json::json!(true));
+        assert_eq!(baseline_ctx["perfetto_output"], GUEST_PERFETTO_OUTPUT);
+        assert_eq!(baseline_ctx["perfetto_host_dir"], "/tmp/x");
     }
 
     #[test]

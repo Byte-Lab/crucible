@@ -84,13 +84,56 @@ Respond with JSON: {"fps_avg": <float>, "fps_p1": <float>, "frame_time_p99_ms": 
             mangohud_output = context.get(
                 "mangohud_output", "/tmp/crucible_mangohud.csv"
             )
-            msg = (
-                f"Collect {phase} measurements via the native GPU benchmark.\n"
-                f"1. Call launch_benchmark(name={benchmark!r}, args={args!r}, "
+            capture_perfetto = bool(context.get("capture_perfetto"))
+            perfetto_output = context.get(
+                "perfetto_output", "/tmp/crucible_trace.perfetto-trace"
+            )
+            perfetto_host_dir = context.get("perfetto_host_dir", "/tmp")
+            step = 1
+            lines = [f"Collect {phase} measurements via the native GPU benchmark."]
+            lines.append(
+                f"{step}. Call launch_benchmark(name={benchmark!r}, args={args!r}, "
                 f"mangohud_output={mangohud_output!r}, "
-                f"duration_secs={duration}) exactly once.\n"
-                f"2. Call fetch_mangohud_log(log_path={mangohud_output!r}) to "
-                "retrieve frame statistics.\n"
+                f"duration_secs={duration}) exactly once. This clean run is "
+                "the measurement — report its numbers."
+            )
+            step += 1
+            lines.append(
+                f"{step}. Call fetch_mangohud_log(log_path={mangohud_output!r}) to "
+                "retrieve frame statistics."
+            )
+            step += 1
+            if capture_perfetto:
+                # The clean run doubles as warmup; the profiled repeat runs
+                # against hot caches, and its trace is what the analyzer
+                # mines for kernel bottlenecks.
+                lines.append(
+                    f"{step}. Call start_profiling(duration_secs={duration + 30}, "
+                    f"output={perfetto_output!r}) to begin a Perfetto "
+                    "kernel-scheduler trace (it auto-stops)."
+                )
+                step += 1
+                lines.append(
+                    f"{step}. Repeat the workload under the trace: call "
+                    f"launch_benchmark(name={benchmark!r}, args={args!r}, "
+                    f"mangohud_output='/tmp/crucible_mangohud_profiled.csv', "
+                    f"duration_secs={duration}) once more. Do NOT use this "
+                    "run's frame numbers — the trace perturbs them."
+                )
+                step += 1
+                lines.append(
+                    f"{step}. Call fetch_perfetto_trace(trace_path={perfetto_output!r}, "
+                    f"host_output_dir={perfetto_host_dir!r}) to pull the kernel "
+                    "trace to the host."
+                )
+                step += 1
+            collection = (
+                f'{{"mangohud": {mangohud_output!r}, '
+                f'"traces": ["<host_path from fetch_perfetto_trace>"]}}'
+                if capture_perfetto
+                else f'{{"mangohud": {mangohud_output!r}}}'
+            )
+            lines.append(
                 "Then emit the final JSON object from the system prompt with:\n"
                 "  fps_avg = fps_avg from fetch_mangohud_log\n"
                 "  fps_p1 = fps_p1 from fetch_mangohud_log\n"
@@ -98,15 +141,17 @@ Respond with JSON: {"fps_avg": <float>, "fps_p1": <float>, "frame_time_p99_ms": 
                 "  psi_cpu_avg = psi_cpu_delta from the launch_benchmark result\n"
                 "  psi_memory_avg = psi_memory_delta from the launch_benchmark "
                 "result\n"
-                "Set collection_paths to "
-                f'{{"mangohud": {mangohud_output!r}}}.\n'
+                f"Set collection_paths to {collection}.\n"
                 "If launch_benchmark or fetch_mangohud_log returns an error, "
                 "or launch_benchmark reports log_found=false, do NOT invent "
                 "metrics and do NOT emit zeros: respond with "
                 '{"error": "<what failed and the exact tool error>"} instead. '
                 "A zero fps_avg from a real run is impossible and would be "
-                "silently accepted as a measurement."
+                "silently accepted as a measurement. A failed Perfetto capture "
+                "is non-fatal: report the frame metrics and note the missing "
+                "trace in collection_paths."
             )
+            msg = "\n".join(lines)
             if hypothesis:
                 msg = f"Hypothesis: {hypothesis}\n" + msg
             return msg

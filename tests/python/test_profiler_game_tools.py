@@ -205,3 +205,56 @@ def test_profiler_steam_user_message_instructs_steam_benchmark():
     assert "duration_secs=90" in msg
     assert "fetch_mangohud_log" in msg
     assert "do NOT invent metrics" in msg or "NOT invent metrics" in msg
+
+
+# ---------------------------------------------------------------------------
+# Perfetto: start_profiling wiring + fetch_perfetto_trace
+# ---------------------------------------------------------------------------
+
+
+def test_start_profiling_sends_duration_and_output():
+    rpc = FakeGuestRpc({"start_profiling": {"status": "ok", "data": {"pid": 7}}})
+    registry = _registry(rpc)
+    result = registry.call("start_profiling", {
+        "duration_secs": 45,
+        "output": "/tmp/trace.perfetto-trace",
+    })
+    assert result["status"] == "started"
+    cmd, args = rpc.calls[0]
+    assert cmd == "start_profiling"
+    # duration_secs is the first-class wire field the guest handler reads;
+    # output rides in config.
+    assert args["duration_secs"] == 45
+    assert args["config"]["output"] == "/tmp/trace.perfetto-trace"
+
+
+def test_fetch_perfetto_trace_writes_host_file(tmp_path):
+    blob = b"\x0a\x0bperfetto-binary-trace"
+    rpc = FakeGuestRpc({
+        "fetch_file": {
+            "status": "ok",
+            "data": {
+                "contents_b64": base64.b64encode(blob).decode(),
+                "truncated": False,
+            },
+        }
+    })
+    registry = _registry(rpc)
+    result = registry.call("fetch_perfetto_trace", {
+        "trace_path": "/tmp/crucible_trace.perfetto-trace",
+        "host_output_dir": str(tmp_path),
+    })
+    assert result["status"] == "ok"
+    assert result["size_bytes"] == len(blob)
+    with open(result["host_path"], "rb") as f:
+        assert f.read() == blob
+
+
+def test_fetch_perfetto_trace_error_when_guest_fails():
+    rpc = FakeGuestRpc({
+        "fetch_file": {"status": "error", "message": "not allowed"}
+    })
+    registry = _registry(rpc)
+    result = registry.call("fetch_perfetto_trace", {})
+    assert result["status"] == "error"
+    assert "not allowed" in result["error"]

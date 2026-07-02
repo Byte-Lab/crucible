@@ -9,6 +9,7 @@ just the file size.
 from __future__ import annotations
 
 import base64
+import os
 from typing import Any
 
 from agents.common.tool_registry import ToolRegistry
@@ -111,3 +112,42 @@ def make_profiler_game_tools(registry: ToolRegistry, guest_rpc: Any) -> None:
         if data.get("truncated"):
             stats["truncated"] = True
         return stats
+
+    @registry.tool(description=(
+        "Fetch a Perfetto trace file from the guest VM and save it under "
+        "the orchestrator's artifact directory on the host. Returns the "
+        "host path and size. Call after the profiled benchmark run "
+        "completes (the capture auto-stops after its duration)."
+    ))
+    def fetch_perfetto_trace(
+        trace_path: str = "/tmp/crucible_trace.perfetto-trace",
+        host_output_dir: str = "/tmp",
+    ) -> dict:
+        if guest_rpc is None:
+            return {
+                "status": "dry_run",
+                "message": f"Would fetch {trace_path} from guest (no guest RPC)",
+            }
+        try:
+            resp = guest_rpc.call("fetch_file", {"path": trace_path})
+        except Exception as exc:
+            return {"status": "error", "error": str(exc)}
+        if resp.get("status") != "ok":
+            return {"status": "error", "error": resp.get("message", "fetch_file failed")}
+        data = resp.get("data", {})
+        contents_b64 = data.get("contents_b64")
+        if not contents_b64:
+            return {"status": "error", "error": "guest returned no trace contents"}
+        blob = base64.b64decode(contents_b64)
+        host_path = os.path.join(host_output_dir, os.path.basename(trace_path))
+        try:
+            with open(host_path, "wb") as f:
+                f.write(blob)
+        except OSError as exc:
+            return {"status": "error", "error": f"cannot write {host_path}: {exc}"}
+        return {
+            "status": "ok",
+            "host_path": host_path,
+            "size_bytes": len(blob),
+            "truncated": bool(data.get("truncated")),
+        }

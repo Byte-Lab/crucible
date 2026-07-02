@@ -93,15 +93,29 @@ def make_profiler_tools(registry: ToolRegistry, guest_rpc: Any) -> None:
 
     make_profiler_game_tools(registry, guest_rpc)
 
-    @registry.tool(description="Start profiling with Perfetto trace collection.")
-    def start_profiling(perfetto_config: str = "", duration_secs: int = 30) -> dict:
+    @registry.tool(description=(
+        "Start a Perfetto kernel-scheduler trace for `duration_secs` (the "
+        "guest auto-stops the capture after that). Call this immediately "
+        "before launching the benchmark so the trace spans the run, then "
+        "fetch it with fetch_perfetto_trace. `output` is the guest trace "
+        "path; leave `perfetto_config` empty to use the default kernel "
+        "config (sched switches/wakeups, cpu freq/idle, IRQ/softirq)."
+    ))
+    def start_profiling(
+        duration_secs: int = 30,
+        output: str = "/tmp/crucible_trace.perfetto-trace",
+        perfetto_config: str = "",
+    ) -> dict:
         if guest_rpc is not None:
+            config: dict[str, Any] = {"output": output}
+            if perfetto_config:
+                config["trace_config"] = perfetto_config
             try:
                 result = guest_rpc.call("start_profiling", {
-                    "perfetto_config": perfetto_config,
                     "duration_secs": duration_secs,
+                    "config": config,
                 })
-                return {"status": "started", "detail": result}
+                return {"status": "started", "output": output, "detail": result}
             except Exception as exc:
                 return {"status": "error", "error": str(exc)}
         return {

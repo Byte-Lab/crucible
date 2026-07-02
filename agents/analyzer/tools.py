@@ -23,6 +23,27 @@ MAX_TOOL_RESULT_BYTES = 200_000
 MAX_SEARCH_MATCHES = 500
 
 
+def _shell_trace_query(trace_path: str, query: str) -> dict:
+    """Fallback path: shell out to a trace_processor_shell binary."""
+    try:
+        result = subprocess.run(
+            ["trace_processor_shell", "--query", query, trace_path],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return {
+            "stdout": result.stdout[:MAX_TOOL_RESULT_BYTES],
+            "stderr": result.stderr[:10_000],
+            "returncode": result.returncode,
+            "truncated": len(result.stdout) > MAX_TOOL_RESULT_BYTES,
+        }
+    except FileNotFoundError:
+        return {"error": "trace_processor_shell not found in PATH"}
+    except subprocess.TimeoutExpired:
+        return {"error": "query timed out after 30 seconds"}
+
+
 def make_analyzer_tools(registry: ToolRegistry) -> None:
     """Register analyzer tools into the given registry."""
 
@@ -47,27 +68,48 @@ def make_analyzer_tools(registry: ToolRegistry) -> None:
         except OSError as exc:
             return {"error": str(exc)}
 
-    @registry.tool(
-        description="Run a SQL query against a Perfetto trace using trace_processor_shell."
-    )
+    @registry.tool(description=(
+        "Run a PerfettoSQL query against a Perfetto trace and return rows. "
+        "Useful tables: sched_slice (scheduling intervals: ts, dur, cpu, "
+        "utid, end_state, priority), thread (utid, tid, name), thread_state "
+        "(runnable/running/sleeping intervals — mine Runnable dur for "
+        "run-queue latency), counter + counter_track (cpufreq, cpuidle). "
+        "Example — top threads by runnable (runqueue) wait: SELECT t.name, "
+        "SUM(ts.dur) waits FROM thread_state ts JOIN thread t USING(utid) "
+        "WHERE ts.state = 'R' GROUP BY 1 ORDER BY 2 DESC LIMIT 15;"
+    ))
     def run_trace_processor_query(trace_path: str, query: str) -> dict:
+        # Prefer the perfetto Python API (venv dependency); fall back to a
+        # trace_processor_shell binary when the module is unavailable.
         try:
-            result = subprocess.run(
-                ["trace_processor_shell", "--query", query, trace_path],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            return {
-                "stdout": result.stdout[:MAX_TOOL_RESULT_BYTES],
-                "stderr": result.stderr[:10_000],
-                "returncode": result.returncode,
-                "truncated": len(result.stdout) > MAX_TOOL_RESULT_BYTES,
-            }
-        except FileNotFoundError:
-            return {"error": "trace_processor_shell not found in PATH"}
-        except subprocess.TimeoutExpired:
-            return {"error": "query timed out after 30 seconds"}
+            from perfetto.trace_processor import TraceProcessor
+        except ImportError:
+            return _shell_trace_query(trace_path, query)
+        if not os.path.exists(trace_path):
+            return {"error": f"trace not found: {trace_path}"}
+        try:
+            tp = TraceProcessor(trace=trace_path)
+        except Exception as exc:
+            return {"error": f"cannot open trace: {exc}"}
+        try:
+            rows = []
+            size = 0
+            truncated = False
+            for row in tp.query(query):
+                d = row.__dict__ if hasattr(row, "__dict__") else dict(row)
+                rows.append(d)
+                size += len(str(d))
+                if size >= MAX_TOOL_RESULT_BYTES or len(rows) >= MAX_SEARCH_MATCHES:
+                    truncated = True
+                    break
+            return {"rows": rows, "row_count": len(rows), "truncated": truncated}
+        except Exception as exc:
+            return {"error": f"query failed: {exc}"}
+        finally:
+            try:
+                tp.close()
+            except Exception:
+                pass
 
     @registry.tool(
         description="Compare two sets of performance measurements, computing delta percentages."

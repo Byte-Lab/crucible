@@ -54,6 +54,53 @@ GUEST_FILE_ALLOWED_PREFIXES = ("/tmp/", "/var/log/crucible/")
 # finishes in a couple of minutes; anything past this is hung.
 LAUNCH_BENCHMARK_TIMEOUT_SECS = 600
 
+# Perfetto trace config (text proto) for kernel-scheduling analysis: the
+# analyzer reasons over scheduler switches/wakeups, run-queue behaviour,
+# CPU frequency/idle, and IRQ handling to find kernel bottlenecks worth
+# patching. Duration is set by the `--time` flag, not here. compact_sched
+# keeps the sched stream small enough to fetch over vsock. Requires the
+# guest kernel's FTRACE/TRACEPOINTS (present in the test kernel).
+PERFETTO_KERNEL_CONFIG = """\
+buffers {
+  size_kb: 131072
+  fill_policy: RING_BUFFER
+}
+data_sources {
+  config {
+    name: "linux.ftrace"
+    ftrace_config {
+      ftrace_events: "sched/sched_switch"
+      ftrace_events: "sched/sched_wakeup"
+      ftrace_events: "sched/sched_wakeup_new"
+      ftrace_events: "sched/sched_waking"
+      ftrace_events: "sched/sched_process_exit"
+      ftrace_events: "sched/sched_process_free"
+      ftrace_events: "task/task_newtask"
+      ftrace_events: "task/task_rename"
+      ftrace_events: "power/cpu_frequency"
+      ftrace_events: "power/cpu_idle"
+      ftrace_events: "power/suspend_resume"
+      ftrace_events: "irq/irq_handler_entry"
+      ftrace_events: "irq/irq_handler_exit"
+      ftrace_events: "irq/softirq_entry"
+      ftrace_events: "irq/softirq_exit"
+      compact_sched {
+        enabled: true
+      }
+    }
+  }
+}
+data_sources {
+  config {
+    name: "linux.process_stats"
+    process_stats_config {
+      scan_all_processes_on_start: true
+      proc_stats_poll_ms: 1000
+    }
+  }
+}
+"""
+
 # --- Steam benchmark (milestone G3) ----------------------------------------
 # Verified on RDNA3 passthrough (G3.0 spike): weston headless with the GL
 # renderer + Xwayland gives Steam titles the X11 path they expect, and
@@ -90,6 +137,9 @@ WESTON_WARMUP_SECS = 6
 # but the minimal rootfs runs no network manager — the agent DHCPs the
 # interface itself before launching the client.
 NETWORK_DHCP_TIMEOUT_SECS = 30
+# traced needs a beat to create its socket before the perfetto client
+# connects; traced_probes registers the ftrace data source in that window.
+PERFETTO_DAEMON_WARMUP_SECS = 2
 
 
 def _has_default_route(route_path: str = "/proc/net/route") -> bool:
@@ -225,10 +275,49 @@ class GuestAgentHandler:
             return GuestResponse.error(f"stop_game failed: {exc}")
         return GuestResponse.ok({"killed": pids_killed})
 
+    def _ensure_perfetto_daemons(self) -> GuestResponse | None:
+        """Start traced + traced_probes (idempotent) for the perfetto client.
+
+        The `perfetto` CLI is only a consumer: it connects to the traced
+        service socket, and traced_probes is what actually programs ftrace.
+        The minimal guest has no init service for them.
+        """
+        daemons = getattr(self, "_perfetto_daemons", None)
+        if daemons and all(p.poll() is None for p in daemons):
+            return None
+        started = []
+        for binary in ("traced", "traced_probes"):
+            try:
+                started.append(
+                    subprocess.Popen(
+                        [binary],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                )
+            except FileNotFoundError:
+                return GuestResponse.error(f"{binary} not found in guest")
+        self._perfetto_daemons = started
+        time.sleep(PERFETTO_DAEMON_WARMUP_SECS)
+        dead = [p.args for p in started if p.poll() is not None]
+        if dead:
+            return GuestResponse.error(f"perfetto daemon(s) exited at start: {dead}")
+        return None
+
     def _handle_start_profiling(self, cmd: GuestCommand) -> GuestResponse:
+        # duration_secs is a first-class wire field; config carries the
+        # optional output path / custom trace_config.
         config = cmd.config or {}
-        duration = config.get("duration_s", 30)
+        duration = cmd.duration_secs or config.get("duration_s", 30)
         output = config.get("output", "/tmp/crucible_trace.perfetto-trace")
+        daemon_error = self._ensure_perfetto_daemons()
+        if daemon_error is not None:
+            return daemon_error
+        # `perfetto -c -` reads a text-proto config from stdin; without one
+        # it records nothing. Feed the kernel-scheduling config (overridable
+        # via config["trace_config"] for a custom capture). `--time` bounds
+        # the capture so a lost stop_profiling can't leave it running.
+        trace_config = config.get("trace_config", PERFETTO_KERNEL_CONFIG)
         try:
             proc = subprocess.Popen(
                 [
@@ -242,11 +331,18 @@ class GuestAgentHandler:
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
-            return GuestResponse.ok({"pid": proc.pid, "output": output})
         except FileNotFoundError:
             return GuestResponse.error("perfetto binary not found")
         except OSError as exc:
             return GuestResponse.error(f"failed to start profiling: {exc}")
+        try:
+            assert proc.stdin is not None
+            proc.stdin.write(trace_config.encode("utf-8"))
+            proc.stdin.close()
+        except OSError as exc:
+            proc.kill()
+            return GuestResponse.error(f"failed to send perfetto config: {exc}")
+        return GuestResponse.ok({"pid": proc.pid, "output": output})
 
     def _handle_stop_profiling(self, cmd: GuestCommand) -> GuestResponse:
         try:
