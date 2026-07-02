@@ -33,7 +33,7 @@ effect_size_threshold = 0.5
 max_stddev_pct = 10
 
 [agents]
-model = "claude-sonnet-4-20250514"
+model = "claude-sonnet-5"
 max_retries = 3
 # Steam mode's launch_steam_benchmark RPC blocks for client settle (240s) +
 # Fossilize shader pre-processing + asset load + the MangoHud log window —

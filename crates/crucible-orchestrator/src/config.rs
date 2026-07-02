@@ -193,7 +193,7 @@ fn default_steam_app_id() -> u32 {
     570
 }
 fn default_model() -> String {
-    "claude-sonnet-4-20250514".to_string()
+    "claude-sonnet-5".to_string()
 }
 fn default_max_retries() -> u32 {
     3
@@ -286,7 +286,7 @@ mod tests {
         assert_eq!(config.measurement.mode, "synthetic"); // default
         assert_eq!(config.measurement.benchmark_args, vec!["--cpu", "2"]); // default
         assert_eq!(config.measurement.benchmark_duration_secs, 30); // default
-        assert_eq!(config.agents.model, "claude-sonnet-4-20250514"); // default
+        assert_eq!(config.agents.model, "claude-sonnet-5"); // default
     }
 
     #[test]

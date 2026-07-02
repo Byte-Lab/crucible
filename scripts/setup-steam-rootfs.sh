@@ -178,10 +178,6 @@ PACKAGES=(
     # Slirp gives the guest a NIC but no lease; the guest agent runs
     # dhclient before launching Steam (CM logon needs a route out).
     isc-dhcp-client
-    # Perfetto (traced/traced_probes) for kernel-scheduler tracing during
-    # the comparison-phase game run; the analyzer reasons over the trace.
-    # The test kernel already has FTRACE/FTRACE_SYSCALLS/TRACEPOINTS.
-    perfetto
 )
 PKG_LIST="$(IFS=,; echo "${PACKAGES[*]}")"
 
@@ -309,6 +305,25 @@ else
     echo "             (WaitingForCredentials); log in once with the snap/host"
     echo "             Steam client or point CRUCIBLE_STEAM_CLIENT_CREDS at a"
     echo "             logged-in Steam dir"
+fi
+
+# --- Perfetto (kernel-scheduler tracing for the profiled baseline run) ------
+# Debian trixie does not package perfetto; copy the host's binaries (the
+# Ubuntu package: perfetto + traced/traced_probes + libperfetto.so). The
+# test kernel already carries FTRACE/FTRACE_SYSCALLS/TRACEPOINTS.
+if [[ -x /usr/bin/perfetto && -x /usr/sbin/traced ]]; then
+    echo "[$SCRIPT_TAG] copying host perfetto binaries into the guest"
+    cp /usr/bin/perfetto "$TARGET/usr/bin/"
+    cp /usr/sbin/traced /usr/sbin/traced_probes "$TARGET/usr/sbin/"
+    if [[ -f /usr/lib/perfetto/libperfetto.so ]]; then
+        install -d "$TARGET/usr/lib/perfetto"
+        cp /usr/lib/perfetto/libperfetto.so "$TARGET/usr/lib/perfetto/"
+        echo /usr/lib/perfetto > "$TARGET/etc/ld.so.conf.d/perfetto.conf"
+        chroot "$TARGET" ldconfig
+    fi
+else
+    echo "[$SCRIPT_TAG] WARN: host has no perfetto (apt install perfetto) —"
+    echo "             the profiled baseline run will fail to capture a trace"
 fi
 
 chroot "$TARGET" chown -R crucible:crucible /home/crucible
