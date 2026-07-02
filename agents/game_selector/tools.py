@@ -23,6 +23,15 @@ NATIVE_BENCHMARKS: dict[str, dict[str, Any]] = {
 }
 
 BENCHMARK_GAMES: dict[int, dict[str, Any]] = {
+    289070: {
+        "name": "Sid Meier's Civilization VI",
+        # Verified headless on RADV passthrough (2026-07-02). Three
+        # self-terminating modes: graphicsbenchmark (GPU flythrough,
+        # writes first-party per-frame CSV), xp2benchmark (heavier GS
+        # scene), aibenchmark (CPU-bound late-game AI turns).
+        "benchmark_args": ["-benchmark", "graphicsbenchmark"],
+        "workload_profile": "gpu_heavy",
+    },
     750920: {
         "name": "Shadow of the Tomb Raider",
         "benchmark_args": ["--benchmark"],
@@ -69,6 +78,13 @@ def make_game_selector_tools(registry: ToolRegistry) -> None:
     @registry.tool(description="List installed Steam games by scanning the Steam library for appmanifest ACF files. Searches common paths if no path given.")
     def list_steam_games(library_path: str = "") -> dict:
         search_paths = [
+            # Seeded guest rootfs library first: in steam mode the guest
+            # launches from this library, not the host's — scanning only
+            # host paths made the selector claim the configured app "is
+            # not installed" while the launch succeeded anyway.
+            os.path.expanduser(
+                "~/.crucible/steam-rootfs/home/crucible/.local/share/Steam/steamapps"
+            ),
             os.path.expanduser("~/snap/steam/common/.local/share/Steam/steamapps"),
             os.path.expanduser("~/.local/share/Steam/steamapps"),
             os.path.expanduser("~/.steam/steam/steamapps"),

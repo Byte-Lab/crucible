@@ -21,6 +21,11 @@ pub struct OrchestratorConfig {
     pub max_cycles: u64,
     #[serde(default = "default_cooldown")]
     pub cycle_cooldown_secs: u64,
+    /// Extra sleep after a *failed* cycle. Without it an upstream outage
+    /// (API spend cap, rate limit) fails cycles instantly and a long
+    /// grind burns its whole --max-cycles budget in seconds.
+    #[serde(default = "default_failure_cooldown")]
+    pub failure_cooldown_secs: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -160,6 +165,9 @@ impl CrucibleConfig {
 
 fn default_cooldown() -> u64 {
     60
+}
+fn default_failure_cooldown() -> u64 {
+    120
 }
 fn default_memory() -> String {
     "16G".to_string()
@@ -414,6 +422,8 @@ mod tests {
         .unwrap();
 
         let config = CrucibleConfig::from_file(tmp.path()).unwrap();
+        // Not set in the TOML above — must fall back to the serde default.
+        assert_eq!(config.orchestrator.failure_cooldown_secs, 120);
         assert_eq!(config.vm.memory, "32G");
         assert_eq!(config.vm.cpus, 16);
         assert_eq!(config.measurement.runs_per_phase, 10);

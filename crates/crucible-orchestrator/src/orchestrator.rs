@@ -500,7 +500,8 @@ impl Orchestrator {
         // sample poisons the phase mean and variance — one 0.0 in a set of
         // 0.0039 fabricated a spurious -10% delta with 33% CV. Reject it as a
         // failed sample so measure_phase collects only clean data points.
-        if !(frame_time_p99_ms > 0.0) {
+        // NaN must also land here, so keep the comparison NaN-rejecting.
+        if !frame_time_p99_ms.is_finite() || frame_time_p99_ms <= 0.0 {
             anyhow::bail!(
                 "profiler {phase} sample has non-positive frame_time_p99_ms \
                  ({frame_time_p99_ms}); treating as a failed run"
@@ -972,6 +973,15 @@ impl Orchestrator {
                 Err(e) => {
                     tracing::error!(error = %e, "cycle failed, resetting state machine");
                     self.state_machine = StateMachine::new();
+                    let backoff = self.config.orchestrator.failure_cooldown_secs;
+                    if backoff > 0 {
+                        tracing::warn!(
+                            backoff_secs = backoff,
+                            "backing off after failed cycle (transient API/VM outages \
+                             would otherwise burn the cycle budget instantly)"
+                        );
+                        tokio::time::sleep(std::time::Duration::from_secs(backoff)).await;
+                    }
                 }
             }
             cycles_completed += 1;
@@ -1261,6 +1271,26 @@ mod tests {
         assert!(orch
             .persist_measurement(cycle_id, "baseline", &agent_result)
             .is_err());
+        assert_eq!(
+            orch.db.get_measurements(cycle_id, "baseline").unwrap().len(),
+            0
+        );
+
+        // Non-finite and negative frame times must never be stored either.
+        // NaN/inf can't ride valid JSON, so for those the inner parse is the
+        // rejecting layer ("NaN"/"inf" literals are malformed JSON); the
+        // is_finite() guard is the in-process backstop should a future
+        // parser accept them. -1.0 crosses the parse and pins the guard.
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY, -1.0] {
+            let agent_result = serde_json::json!(
+                {"response": format!("{{\"fps_avg\": 1.0, \"frame_time_p99_ms\": {bad}}}")}
+            );
+            assert!(
+                orch.persist_measurement(cycle_id, "baseline", &agent_result)
+                    .is_err(),
+                "frame_time_p99_ms = {bad} must be rejected"
+            );
+        }
         assert_eq!(
             orch.db.get_measurements(cycle_id, "baseline").unwrap().len(),
             0

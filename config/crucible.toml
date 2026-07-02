@@ -3,6 +3,7 @@ db_path = "~/.crucible/state.db"
 artifact_dir = "~/.crucible/artifacts"
 max_cycles = 0              # 0 = unlimited
 cycle_cooldown_secs = 60
+failure_cooldown_secs = 120
 
 [vm]
 kernel_src = "/home/void/upstream/linux"

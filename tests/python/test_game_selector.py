@@ -21,6 +21,25 @@ def test_check_benchmark_support_known_games():
     assert result["has_benchmark"] is False
 
 
+def test_check_benchmark_support_civ6():
+    registry = ToolRegistry()
+    make_game_selector_tools(registry)
+    result = registry.call("check_benchmark_support", {"app_id": 289070})
+    assert result["has_benchmark"] is True
+    assert result["benchmark_args"] == ["-benchmark", "graphicsbenchmark"]
+
+
+def test_list_steam_games_searches_seeded_rootfs_library():
+    registry = ToolRegistry()
+    make_game_selector_tools(registry)
+    result = registry.call("list_steam_games", {})
+    searched = result.get("searched_paths") or []
+    if searched:  # only reported when nothing found on this host
+        assert any("steam-rootfs" in p for p in searched)
+    else:
+        assert result["count"] >= 1
+
+
 def test_list_native_benchmarks_tool():
     registry = ToolRegistry()
     make_game_selector_tools(registry)
