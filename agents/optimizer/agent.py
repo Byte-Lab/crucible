@@ -48,6 +48,25 @@ Respond with JSON only (no prose, no fences):
         if attempt > 1:
             msg += f"Previous attempts: {json.dumps(context.get('previous_attempts', []))}\nTry different approach.\n"
         msg += f"Kernel source: {kernel_src}\n"
+        if context.get("tuning_only"):
+            msg += (
+                "\nTUNING-ONLY MODE. Do NOT edit kernel source and do NOT call "
+                "finalize_patch — leave patch_path as the empty string and set "
+                'layer to "tuning". Propose one or more runtime sysctl changes '
+                "in sysctl_changes as "
+                '[{"key": "<dotted.sysctl.name>", "value": "<new value>", '
+                '"note": "<why, and the expected effect on this bottleneck>"}]. '
+                "Every key MUST be a knob that already exists under /proc/sys on "
+                "a stock Linux 7.1 guest (e.g. vm.dirty_ratio, vm.dirty_background_ratio, "
+                "vm.swappiness, vm.compaction_proactiveness, vm.watermark_scale_factor, "
+                "vm.page-cluster, kernel.sched_cfs_bandwidth_slice_us, "
+                "kernel.sched_autogroup_enabled, kernel.numa_balancing, "
+                "kernel.timer_migration, kernel.randomize_va_space, "
+                "kernel.sched_rt_runtime_us). Do NOT invent debugfs-only knobs "
+                "(e.g. sched/base_slice_ns is NOT a sysctl on this kernel). Pick "
+                "changes whose direction plausibly helps the specific bottleneck "
+                "above, and that differ from previous attempts."
+            )
         return msg
 
     def setup_tools(self, registry: ToolRegistry) -> None:

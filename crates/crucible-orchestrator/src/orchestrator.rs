@@ -720,6 +720,12 @@ impl Orchestrator {
             // Optimizer so it doesn't fish through the kernel tree blindly.
             // Without this the LLM burns its whole timeout reading files at
             // random looking for something to change.
+            // allowed_layers restricts what the optimizer may change. A
+            // "tuning"-only set forces live sysctl changes (no kernel patch,
+            // so no rebuild + reboot — the comparison runs on the same VM,
+            // avoiding the fragile GPU-passthrough reboot path).
+            let allowed = &self.config.agents.optimizer.allowed_layers;
+            let tuning_only = allowed.len() == 1 && allowed[0] == "tuning";
             let mut optimize_context = serde_json::json!({
                 "action": "optimize",
                 "game_name": game_name,
@@ -727,6 +733,8 @@ impl Orchestrator {
                 "bottleneck": analysis,
                 "kernel_src": self.config.vm.kernel_src,
                 "attempt_number": attempt_number,
+                "allowed_layers": allowed,
+                "tuning_only": tuning_only,
             });
             if !previous_attempts.is_empty() {
                 optimize_context["previous_attempts"] =
