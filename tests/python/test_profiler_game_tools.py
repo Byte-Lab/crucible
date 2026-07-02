@@ -65,6 +65,7 @@ def test_launch_benchmark_forwards_to_guest():
             "args": ["--size", "1920x1080"],
             "mangohud_output": "/tmp/mh.csv",
             "duration_secs": 15,
+            "coload_cpu": 0,
         },
     )]
 

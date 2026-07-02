@@ -82,6 +82,12 @@ pub struct MeasurementConfig {
     /// `["-benchmark", "graphicsbenchmark"]`). Empty = no extra args.
     #[serde(default)]
     pub steam_launch_args: Vec<String>,
+    /// CPU co-load workers (stress-ng --cpu N) run alongside a game-mode
+    /// benchmark. On a few-vCPU guest this creates the scheduler contention
+    /// that makes CPU/scheduler sysctl tunings measurably affect fps. 0 =
+    /// no co-load.
+    #[serde(default)]
+    pub coload_cpu: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -236,6 +242,7 @@ impl Default for MeasurementConfig {
             game_benchmark: default_game_benchmark(),
             steam_app_id: default_steam_app_id(),
             steam_launch_args: Vec::new(),
+            coload_cpu: 0,
         }
     }
 }

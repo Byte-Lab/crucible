@@ -115,6 +115,13 @@ pub enum GuestCommand {
         /// log window from it (log must stop before the app exits or the
         /// CSV is never flushed).
         duration_secs: u32,
+        /// If > 0, the guest spawns `stress-ng --cpu N` alongside the
+        /// benchmark for its duration. On a few-vCPU guest this creates the
+        /// scheduler contention that makes CPU/scheduler sysctl tunings have
+        /// a measurable effect on the benchmark's frame rate (an idle guest
+        /// has nothing for those knobs to arbitrate).
+        #[serde(default)]
+        coload_cpu: u32,
     },
     /// Run a Steam title under weston-headless + MangoHud (milestone G3).
     /// `args` are extra launch options (e.g. Source 2 timedemo flags);
@@ -258,18 +265,21 @@ mod tests {
             args: vec!["--size".to_string(), "1920x1080".to_string()],
             mangohud_output: "/tmp/crucible_mangohud.csv".to_string(),
             duration_secs: 15,
+            coload_cpu: 4,
         };
         let json = serde_json::to_value(&cmd).unwrap();
         assert_eq!(json["cmd"], "launch_benchmark");
         assert_eq!(json["name"], "vkmark");
         assert_eq!(json["mangohud_output"], "/tmp/crucible_mangohud.csv");
         assert_eq!(json["duration_secs"], 15);
+        assert_eq!(json["coload_cpu"], 4);
         let parsed: GuestCommand = serde_json::from_value(json).unwrap();
         if let GuestCommand::LaunchBenchmark {
             name,
             args,
             mangohud_output,
             duration_secs,
+            ..
         } = parsed
         {
             assert_eq!(name, "vkmark");

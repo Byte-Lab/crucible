@@ -616,6 +616,26 @@ class GuestAgentHandler:
 
         self._ensure_gpu_module()
 
+        # Optional CPU co-load: on a few-vCPU guest an idle system gives
+        # scheduler/CPU sysctls nothing to arbitrate, so tunings show no
+        # measurable effect. A stress-ng background load makes the scheduler
+        # contended, so a tuning that shifts CPU toward the benchmark moves
+        # its frame rate. Runs for the benchmark window + margin, then is
+        # killed. Present in both baseline and comparison, so it's a constant
+        # backdrop — only the sysctl tuning differs between phases.
+        coload = getattr(cmd, "coload_cpu", None) or 0
+        coload_proc = None
+        if coload > 0:
+            try:
+                coload_proc = subprocess.Popen(
+                    ["stress-ng", "--cpu", str(coload),
+                     "--timeout", f"{duration + 10}s"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+            except FileNotFoundError:
+                logging.warning("coload requested but stress-ng not found")
+
         psi_pre = _read_system_psi_avg10()
         try:
             proc = subprocess.run(
@@ -631,6 +651,14 @@ class GuestAgentHandler:
             return GuestResponse.error(
                 f"{name} exceeded wall clock timeout of {LAUNCH_BENCHMARK_TIMEOUT_SECS}s"
             )
+        finally:
+            if coload_proc is not None:
+                coload_proc.terminate()
+                try:
+                    coload_proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    coload_proc.kill()
+                subprocess.run(["pkill", "-x", "stress-ng"], check=False)
         psi_post = _read_system_psi_avg10()
 
         # MangoHud writes two CSVs: the per-frame log and a *_summary.csv

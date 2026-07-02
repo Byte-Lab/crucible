@@ -34,6 +34,7 @@ def make_profiler_game_tools(registry: ToolRegistry, guest_rpc: Any) -> None:
         args: list[str],
         mangohud_output: str,
         duration_secs: int = 10,
+        coload_cpu: int = 0,
     ) -> dict:
         if guest_rpc is None:
             return {
@@ -49,6 +50,7 @@ def make_profiler_game_tools(registry: ToolRegistry, guest_rpc: Any) -> None:
                 "args": args,
                 "mangohud_output": mangohud_output,
                 "duration_secs": duration_secs,
+                "coload_cpu": coload_cpu,
             })
         except Exception as exc:
             return {"status": "error", "error": str(exc)}

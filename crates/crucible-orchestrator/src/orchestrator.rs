@@ -115,6 +115,7 @@ pub fn measurement_context(
         context["mangohud_output"] = serde_json::json!(GUEST_MANGOHUD_OUTPUT);
         context["duration_secs"] =
             serde_json::json!(config.measurement.benchmark_duration_secs);
+        context["coload_cpu"] = serde_json::json!(config.measurement.coload_cpu);
         if capture_perfetto {
             // The profiled repeat runs the workload once more under a
             // Perfetto kernel-scheduler trace; the orchestrator only sets

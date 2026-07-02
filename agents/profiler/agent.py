@@ -89,13 +89,14 @@ Respond with JSON: {"fps_avg": <float>, "fps_p1": <float>, "frame_time_p99_ms": 
                 "perfetto_output", "/tmp/crucible_trace.perfetto-trace"
             )
             perfetto_host_dir = context.get("perfetto_host_dir", "/tmp")
+            coload_cpu = int(context.get("coload_cpu") or 0)
             step = 1
             lines = [f"Collect {phase} measurements via the native GPU benchmark."]
             lines.append(
                 f"{step}. Call launch_benchmark(name={benchmark!r}, args={args!r}, "
                 f"mangohud_output={mangohud_output!r}, "
-                f"duration_secs={duration}) exactly once. This clean run is "
-                "the measurement — report its numbers."
+                f"duration_secs={duration}, coload_cpu={coload_cpu}) exactly "
+                "once. This clean run is the measurement — report its numbers."
             )
             step += 1
             lines.append(
@@ -117,8 +118,9 @@ Respond with JSON: {"fps_avg": <float>, "fps_p1": <float>, "frame_time_p99_ms": 
                     f"{step}. Repeat the workload under the trace: call "
                     f"launch_benchmark(name={benchmark!r}, args={args!r}, "
                     f"mangohud_output='/tmp/crucible_mangohud_profiled.csv', "
-                    f"duration_secs={duration}) once more. Do NOT use this "
-                    "run's frame numbers — the trace perturbs them."
+                    f"duration_secs={duration}, coload_cpu={coload_cpu}) once "
+                    "more. Do NOT use this run's frame numbers — the trace "
+                    "perturbs them."
                 )
                 step += 1
                 lines.append(

@@ -138,6 +138,65 @@ def test_launch_benchmark_runs_under_mangohud(handler, monkeypatch):
     assert "autostart_log=1" in captured["env"]["MANGOHUD_CONFIG"]
 
 
+def test_launch_benchmark_spawns_cpu_coload(handler, monkeypatch):
+    import guest.crucible_guest_agent as agent_mod
+
+    popens = []
+
+    class FakeCoload:
+        def terminate(self):
+            pass
+
+        def wait(self, timeout=None):
+            return 0
+
+    def fake_popen(argv, **kwargs):
+        popens.append(argv)
+        return FakeCoload()
+
+    def fake_run(argv, **kwargs):
+        class Result:
+            returncode = 0
+            stdout = "vkmark Score: 4321"
+            stderr = ""
+
+        return Result()
+
+    monkeypatch.setattr(agent_mod.subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(agent_mod.subprocess, "run", fake_run)
+    resp = handler.handle(_launch_cmd(coload_cpu=4, duration_secs=15))
+    assert resp.status == "ok"
+    # A stress-ng --cpu 4 co-load must be spawned alongside the benchmark
+    # (and terminated in the finally block).
+    coload = [a for a in popens if a[0] == "stress-ng"]
+    assert coload, f"no stress-ng co-load spawned; popens={popens}"
+    assert "--cpu" in coload[0] and "4" in coload[0]
+
+
+def test_launch_benchmark_no_coload_when_zero(handler, monkeypatch):
+    import guest.crucible_guest_agent as agent_mod
+
+    popens = []
+    monkeypatch.setattr(
+        agent_mod.subprocess, "Popen",
+        lambda argv, **k: popens.append(argv) or _DummyProc(),
+    )
+    monkeypatch.setattr(
+        agent_mod.subprocess, "run",
+        lambda *a, **k: type("R", (), {"returncode": 0, "stdout": "", "stderr": ""})(),
+    )
+    handler.handle(_launch_cmd(coload_cpu=0))
+    assert not [a for a in popens if a and a[0] == "stress-ng"]
+
+
+class _DummyProc:
+    def terminate(self):
+        pass
+
+    def wait(self, timeout=None):
+        return 0
+
+
 def test_launch_benchmark_missing_binary(handler, monkeypatch):
     import guest.crucible_guest_agent as agent_mod
 
