@@ -112,18 +112,26 @@ STEAM_HOME = f"/home/{STEAM_USER}"
 # ~/.steam/debian-installation (not our extracted client) and blocks
 # forever on a zenity first-run dialog when its bootstrap is missing.
 STEAM_SH = f"{STEAM_HOME}/.local/share/Steam/steam.sh"
-WESTON_ARGV = ["weston", "--backend=headless", "--renderer=gl", "--xwayland"]
-# Route OpenGL titles (Aspyr's Civ 6 port) through zink → RADV Vulkan.
-# RADV Vulkan is proven on this card (vkmark renders thousands of fps),
-# whereas native radeonsi GL under Xwayland's headless glamor is the weak
-# link that leaves Aspyr's GL layer presenting no frames. zink is a no-op
-# for Vulkan-native titles (they bind RADV directly, never the GL driver).
-# GALLIUM_DRIVER is not forced (that would also hijack the compositor's own
-# GL); the loader override + GLX vendor are enough to steer the app's GL.
-STEAM_GL_ZINK_ENV = {
-    "MESA_LOADER_DRIVER_OVERRIDE": "zink",
-    "__GLX_VENDOR_LIBRARY_NAME": "mesa",
-}
+# --idle-time=0 is load-bearing: weston's default 300s idle timeout puts the
+# compositor to sleep (output blanked, repaint loop stopped), and a headless
+# guest has no input seat to ever wake it. Asleep, weston sends no frame
+# callbacks, so Xwayland Present degrades to its 1 Hz fallback timer — GL
+# titles (Civ 6) "rendered" at ~1000ms/frame on an idle GPU — and Vulkan WSI
+# presents block forever (Dota 2 frozen mid-frame). Steam client settle alone
+# takes ~240s, so every game launch landed just past the 300s deadline.
+WESTON_ARGV = [
+    "weston",
+    "--backend=headless",
+    "--renderer=gl",
+    "--xwayland",
+    "--idle-time=0",
+]
+# NOTE: an earlier experiment routed GL titles through zink → RADV
+# (MESA_LOADER_DRIVER_OVERRIDE=zink) on the theory that radeonsi GL
+# "presents no frames" under headless Xwayland. The real culprit was the
+# weston idle-out above; stock radeonsi renders Civ 6 fine once the
+# compositor stays awake, and the Mesa default is what real desktops run —
+# so the launch env deliberately does not override the GL driver.
 XDG_RUNTIME_DIR = "/run/crucible-xdg"
 # The Steam client must be fully up (boot + CM logon + library reconcile)
 # before -applaunch is issued: a launch bundled with the client's own
@@ -939,12 +947,14 @@ class GuestAgentHandler:
         duration = cmd.duration_secs or DEFAULT_LAUNCH_BENCHMARK_DURATION_SECS
         env = os.environ.copy()
         env.update(client_env)
-        # Steer OpenGL titles onto zink→RADV. The game inherits the client's
-        # env; the client itself is headless (its GL only draws an unseen UI),
-        # so routing it through zink too is harmless. Vulkan-native titles
-        # ignore this (they bind RADV directly).
-        env.update(STEAM_GL_ZINK_ENV)
         env.update({
+            # Mesa GL vsync off. Under Xwayland + weston-headless a vsync'd
+            # GLX swap costs ~1.5 output repaint ticks (Civ 6's menu paced
+            # at 40fps against the 60Hz headless output with the GPU 4%
+            # busy) — the compositor's present quantization must not cap or
+            # skew benchmark numbers. Vulkan titles pick their own present
+            # mode and ignore this.
+            "vblank_mode": "0",
             # runuser overrides HOME/USER for the target user, but be
             # explicit: Steam derives all its paths from HOME.
             "HOME": STEAM_HOME,

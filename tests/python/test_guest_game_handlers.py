@@ -571,6 +571,13 @@ def test_launch_steam_benchmark_starts_weston_and_steam(handler, monkeypatch, tm
     assert "--backend=headless" in weston_argv
     assert "--renderer=gl" in weston_argv
     assert "--xwayland" in weston_argv
+    # Weston's default 300s idle timeout blanks the (input-less) headless
+    # output and nothing ever wakes it: frame callbacks stop, Xwayland
+    # Present degrades to its 1 Hz fallback timer (Civ 6 at ~1000ms/frame)
+    # and Vulkan WSI presents block forever (Dota frozen). Idle-out must
+    # be disabled or every game launched after the 300s mark measures the
+    # sleeping compositor, not the GPU.
+    assert "--idle-time=0" in weston_argv
 
     # Two-phase launch. The FIRST client start boots -silent AND carries
     # -applaunch (plus the MangoHud env the game inherits): verified
@@ -589,6 +596,17 @@ def test_launch_steam_benchmark_starts_weston_and_steam(handler, monkeypatch, tm
     assert "autostart_log=60" in client_env_used["MANGOHUD_CONFIG"]
     assert "log_duration=60" in client_env_used["MANGOHUD_CONFIG"]
     assert "no_display" not in client_env_used["MANGOHUD_CONFIG"]
+    # Mesa GL vsync-off: under Xwayland+weston-headless a vsync'd GLX swap
+    # costs ~1.5 repaint ticks (Civ 6 menu measured 40fps against a 60Hz
+    # output with the GPU 4% busy) — benchmark numbers must not be capped
+    # or quantized by the compositor's present pacing.
+    assert client_env_used["vblank_mode"] == "0"
+    # The zink routing experiment is reverted: "radeonsi presents no
+    # frames" was actually the weston idle-out bug, and stock radeonsi GL
+    # is what a real desktop runs (measured fine once the compositor stays
+    # awake). The launch env must not steer Mesa away from the default.
+    assert "MESA_LOADER_DRIVER_OVERRIDE" not in client_env_used
+    assert "__GLX_VENDOR_LIBRARY_NAME" not in client_env_used
 
     # The SECOND invocation re-sends -applaunch over IPC as a retry; it has
     # no -silent (the client is already up).
