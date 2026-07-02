@@ -515,6 +515,15 @@ impl Orchestrator {
         phase: &str,
         game_name: &str,
     ) -> Result<u32> {
+        // Warmup runs are discarded: the first benchmark after boot (or a
+        // kernel swap + reboot) hits a cold GPU whose clocks haven't ramped,
+        // otherwise landing as a low-fps outlier in the sample set.
+        for run in 0..self.config.measurement.warmup_runs {
+            let ctx = measurement_context(&self.config, phase, game_name, false);
+            if let Err(e) = self.run_agent(AgentName::Profiler, ctx).await {
+                tracing::warn!(phase, run, error = %e, "warmup run failed; continuing");
+            }
+        }
         let runs = self.config.measurement.runs_per_phase.max(1);
         let mut persisted = 0u32;
         for run in 0..runs {
