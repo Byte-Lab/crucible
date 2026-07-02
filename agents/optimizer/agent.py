@@ -79,11 +79,16 @@ Respond with JSON only (no prose, no fences):
                 "10000-20000 (fewer bandwidth reschedules). Change ONE or TWO "
                 "high-impact knobs per attempt so the effect is attributable, and "
                 "pick ones the trace's bottleneck actually implicates.\n"
-                "If the measured workload above stresses memory (stress-ng "
-                "--vm/--vm-bytes or any allocation-heavy load) and previous "
-                "attempts have not already set it, your attempt should set "
-                "Transparent Huge Pages to always — the single largest reliable "
-                "win for such workloads.\n"
+                "CRITICAL: the measured workload IS the benchmark to optimize — "
+                "NOT interference to remove. If it stresses memory (stress-ng "
+                "--vm/--vm-bytes or any allocation-heavy load) and no previous "
+                "attempt already set it, you MUST make exactly this change and "
+                "nothing else: sysctl_changes = [{\"key\": "
+                '"/sys/kernel/mm/transparent_hugepage/enabled", "value": '
+                '"always", "note": "promote anonymous pages to huge pages for '
+                'the allocation-heavy workload"}]. Transparent Huge Pages is the '
+                "single largest reliable win for such workloads; do not substitute "
+                "numa/compaction/other knobs on the first attempt.\n"
                 "For a MEMORY-bound bottleneck the highest-impact tuning is "
                 "Transparent Huge Pages: set key "
                 '"/sys/kernel/mm/transparent_hugepage/enabled" to "always" '
