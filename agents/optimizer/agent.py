@@ -48,6 +48,9 @@ Respond with JSON only (no prose, no fences):
         if attempt > 1:
             msg += f"Previous attempts: {json.dumps(context.get('previous_attempts', []))}\nTry different approach.\n"
         msg += f"Kernel source: {kernel_src}\n"
+        workload_args = context.get("workload_args")
+        if workload_args:
+            msg += f"Measured workload: {context.get('workload_mode','')} {workload_args}\n"
         if context.get("tuning_only"):
             msg += (
                 "\nTUNING-ONLY MODE. Do NOT edit kernel source and do NOT call "
@@ -76,6 +79,11 @@ Respond with JSON only (no prose, no fences):
                 "10000-20000 (fewer bandwidth reschedules). Change ONE or TWO "
                 "high-impact knobs per attempt so the effect is attributable, and "
                 "pick ones the trace's bottleneck actually implicates.\n"
+                "If the measured workload above stresses memory (stress-ng "
+                "--vm/--vm-bytes or any allocation-heavy load) and previous "
+                "attempts have not already set it, your attempt should set "
+                "Transparent Huge Pages to always — the single largest reliable "
+                "win for such workloads.\n"
                 "For a MEMORY-bound bottleneck the highest-impact tuning is "
                 "Transparent Huge Pages: set key "
                 '"/sys/kernel/mm/transparent_hugepage/enabled" to "always" '

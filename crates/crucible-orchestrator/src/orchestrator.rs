@@ -744,6 +744,12 @@ impl Orchestrator {
                 "attempt_number": attempt_number,
                 "allowed_layers": allowed,
                 "tuning_only": tuning_only,
+                // The concrete workload so the optimizer can pick knobs the
+                // benchmark actually responds to (e.g. a stress-ng --vm
+                // memory workload → transparent hugepages), rather than
+                // guessing from the bottleneck summary alone.
+                "workload_mode": self.config.measurement.mode,
+                "workload_args": self.config.measurement.benchmark_args,
             });
             if !previous_attempts.is_empty() {
                 optimize_context["previous_attempts"] =
