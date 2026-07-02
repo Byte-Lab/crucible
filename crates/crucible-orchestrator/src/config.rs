@@ -199,7 +199,9 @@ fn default_max_retries() -> u32 {
     3
 }
 fn default_timeout() -> u64 {
-    300
+    // Sized for steam mode: the launch_steam_benchmark RPC blocks for
+    // client settle + shader pre-processing + asset load + log window.
+    1500
 }
 fn default_max_tokens() -> u32 {
     4096

@@ -35,7 +35,12 @@ struct CycleOutcome {
 
 /// Drive one full cycle with the given `[measurement]` body and rootfs,
 /// then verify the durable rows and scan agent stderr for tool leaks.
-async fn run_cycle_and_verify(measurement_toml: &str, rootfs: &str, vfio_device: &str) -> CycleOutcome {
+async fn run_cycle_and_verify(
+    measurement_toml: &str,
+    rootfs: &str,
+    vfio_device: &str,
+    memory: &str,
+) -> CycleOutcome {
     let mut tmp_dir = tempfile::tempdir().unwrap();
     // Postmortems on a failed cycle need the agent stderr and the DB; the
     // TempDir guard deletes them with the panic unwinding past it.
@@ -72,7 +77,7 @@ async fn run_cycle_and_verify(measurement_toml: &str, rootfs: &str, vfio_device:
         kernel_src = "{kernel}"
         guest_rootfs = "{rootfs}"
         guest_payload = "{guest_payload}"
-        memory = "4G"
+        memory = "{memory}"
         cpus = 4
         vfio_device = "{vfio_device}"
         boot_timeout_secs = 180
@@ -82,7 +87,7 @@ async fn run_cycle_and_verify(measurement_toml: &str, rootfs: &str, vfio_device:
         {measurement}
 
         [agents]
-        timeout_secs = 600
+        timeout_secs = 1500
         "#,
         db = db_path.display(),
         art = artifact_dir.display(),
@@ -90,6 +95,7 @@ async fn run_cycle_and_verify(measurement_toml: &str, rootfs: &str, vfio_device:
         rootfs = rootfs,
         guest_payload = guest_payload,
         vfio_device = vfio_device,
+        memory = memory,
         measurement = measurement_toml,
     )
     .unwrap();
@@ -243,6 +249,7 @@ async fn synthetic_cycle_writes_measurements_and_evaluation() {
         warmup_runs = 0"#,
         &rootfs,
         "",
+        "4G",
     )
     .await;
 }
@@ -275,6 +282,7 @@ async fn gpu_game_cycle_produces_nonzero_fps() {
         warmup_runs = 0"#,
         &rootfs,
         &vfio_device,
+        "4G",
     )
     .await;
 
@@ -325,6 +333,10 @@ async fn steam_cycle_produces_nonzero_fps() {
         warmup_runs = 0"#,
         &rootfs,
         &vfio_device,
+        // Steam mode builds the pressure-vessel runtime container in the
+        // ephemeral overlay every boot and runs Dota alongside it — 16G
+        // OOMs (mmap failures stall the launch). 24G has headroom.
+        "24G",
     )
     .await;
 

@@ -8,6 +8,7 @@ import glob
 import json
 import logging
 import os
+import pwd
 import re
 import signal
 import socket
@@ -59,12 +60,49 @@ LAUNCH_BENCHMARK_TIMEOUT_SECS = 600
 # MangoHud hooks the present chain through Xwayland.
 STEAM_USER = "crucible"
 STEAM_HOME = f"/home/{STEAM_USER}"
+# Invoke the extracted client's steam.sh directly. The Debian
+# /usr/games/steam wrapper must never run headless: it targets
+# ~/.steam/debian-installation (not our extracted client) and blocks
+# forever on a zenity first-run dialog when its bootstrap is missing.
+STEAM_SH = f"{STEAM_HOME}/.local/share/Steam/steam.sh"
 WESTON_ARGV = ["weston", "--backend=headless", "--renderer=gl", "--xwayland"]
 XDG_RUNTIME_DIR = "/run/crucible-xdg"
-# Game startup (Steam client boot + game load) happens before MangoHud's
-# log window even starts; the CSV wait budget is duration + this grace.
-STEAM_LAUNCH_GRACE_SECS = 180
+# The Steam client must be fully up (boot + CM logon + library reconcile)
+# before -applaunch is issued: a launch bundled with the client's own
+# startup gets dropped when the client restarts through its update flow
+# (observed 2026-07-01 — client came up, game never started). The client
+# may also restart itself once to self-update on first boot, so liveness
+# is polled until it stays up continuously for STEAM_CLIENT_STABLE_SECS.
+STEAM_CLIENT_SETTLE_SECS = 300
+STEAM_CLIENT_STABLE_SECS = 45
+STEAM_CLIENT_POLL_SECS = 5
+# MangoHud's autostart_log value is a delay in seconds from process start;
+# this skips the load screen so the log window measures menu rendering,
+# not asset streaming.
+STEAM_LOG_START_DELAY_SECS = 60
+# Between -applaunch and first frames come Steam's Fossilize shader
+# pre-processing (~3 min per boot — the shadercache lives in the ephemeral
+# overlay) and the 68G asset load over 9p. The CSV wait budget is
+# log-start delay + duration + this grace.
+STEAM_LAUNCH_GRACE_SECS = 600
 WESTON_WARMUP_SECS = 6
+# Steam's CM logon needs a route out. vng's slirp netdev provides one,
+# but the minimal rootfs runs no network manager — the agent DHCPs the
+# interface itself before launching the client.
+NETWORK_DHCP_TIMEOUT_SECS = 30
+
+
+def _has_default_route(route_path: str = "/proc/net/route") -> bool:
+    """True when the kernel routing table has a default (0.0.0.0) route."""
+    try:
+        with open(route_path, encoding="ascii") as f:
+            lines = f.readlines()[1:]
+    except OSError:
+        return False
+    return any(
+        len(fields) > 1 and fields[1] == "00000000"
+        for fields in (line.split() for line in lines)
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -472,6 +510,12 @@ class GuestAgentHandler:
         Recipe verified on RDNA3 passthrough: headless backend + GL
         renderer + Xwayland; clients reach it via WAYLAND_DISPLAY/DISPLAY
         inside a private XDG_RUNTIME_DIR.
+
+        weston MUST run as the same unprivileged user as the Steam client
+        (the agent itself is root). If weston runs as root, its Wayland
+        socket and the Xwayland X-auth cookie live under root's ownership
+        and the crucible-user Steam client gets "Unable to open display"
+        and segfaults on its post-update re-exec (observed 2026-07-01).
         """
         client_env = {
             "XDG_RUNTIME_DIR": XDG_RUNTIME_DIR,
@@ -482,27 +526,168 @@ class GuestAgentHandler:
         if weston is not None and weston.poll() is None:
             return client_env
         try:
+            steam_pw = pwd.getpwnam(STEAM_USER)
+        except KeyError:
+            return GuestResponse.error(f"steam user {STEAM_USER} not found")
+        try:
             os.makedirs(XDG_RUNTIME_DIR, mode=0o700, exist_ok=True)
+            os.chown(XDG_RUNTIME_DIR, steam_pw.pw_uid, steam_pw.pw_gid)
             os.chmod(XDG_RUNTIME_DIR, 0o700)
         except OSError as exc:
-            return GuestResponse.error(f"cannot create XDG_RUNTIME_DIR: {exc}")
+            return GuestResponse.error(f"cannot prepare XDG_RUNTIME_DIR: {exc}")
+        # Launch weston as the steam user so the display it creates is
+        # owned by (and reachable by) that same user.
         env = os.environ.copy()
         env["XDG_RUNTIME_DIR"] = XDG_RUNTIME_DIR
+        env["HOME"] = STEAM_HOME
+        env["USER"] = STEAM_USER
+        weston_argv = ["runuser", "-u", STEAM_USER, "--", *WESTON_ARGV]
         try:
             self._weston_proc = subprocess.Popen(
-                WESTON_ARGV,
+                weston_argv,
                 env=env,
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
             )
         except FileNotFoundError:
-            return GuestResponse.error("weston binary not found")
+            return GuestResponse.error("runuser or weston binary not found")
         time.sleep(WESTON_WARMUP_SECS)
         if self._weston_proc.poll() is not None:
             return GuestResponse.error(
                 f"weston exited immediately (code {self._weston_proc.returncode})"
             )
         return client_env
+
+    def _ensure_network(self) -> GuestResponse | None:
+        """Bring up DHCP on the first non-lo interface (idempotent).
+
+        Returns an error response when no route can be established —
+        without one the Steam client sits at the login screen forever,
+        which would otherwise surface as an opaque CSV timeout.
+        """
+        if _has_default_route():
+            return None
+        try:
+            ifaces = sorted(
+                name for name in os.listdir("/sys/class/net") if name != "lo"
+            )
+        except OSError as exc:
+            return GuestResponse.error(f"cannot list network interfaces: {exc}")
+        if not ifaces:
+            return GuestResponse.error("no network interface for Steam logon")
+        try:
+            proc = subprocess.run(
+                ["dhclient", ifaces[0]],
+                capture_output=True,
+                text=True,
+                timeout=NETWORK_DHCP_TIMEOUT_SECS,
+            )
+        except FileNotFoundError:
+            return GuestResponse.error("dhclient not found in guest")
+        except subprocess.TimeoutExpired:
+            return GuestResponse.error(
+                f"dhclient {ifaces[0]} timed out after {NETWORK_DHCP_TIMEOUT_SECS}s"
+            )
+        if proc.returncode != 0:
+            return GuestResponse.error(
+                f"dhclient {ifaces[0]} failed: {(proc.stderr or '').strip()[:200]}"
+            )
+        return None
+
+    @staticmethod
+    def _steam_client_running() -> bool:
+        """True when the Steam client binary is alive for the steam user.
+
+        The steam.sh wrapper exits 0 once the client daemonizes, so the
+        wrapper's Popen handle says nothing about client liveness — probe
+        the `steam` process itself.
+        """
+        try:
+            probe = subprocess.run(
+                ["pgrep", "-u", STEAM_USER, "-x", "steam"],
+                capture_output=True,
+            )
+        except FileNotFoundError:
+            return False
+        return probe.returncode == 0
+
+    @staticmethod
+    def _raise_game_sysctls() -> None:
+        """Raise kernel limits modern Steam titles need (best-effort).
+
+        Dota 2 under the Steam Linux Runtime maps far more than the
+        default 65530 VMAs (RADV + pressure-vessel + Fossilize); the
+        minimal guest ships the stock default, so mmap fails with
+        "Cannot allocate memory" and the game never spawns. Steam Deck
+        and gaming distros ship 1048576+. overcommit_memory=1 avoids
+        heuristic rejection of the game's large sparse reservations.
+        """
+        for key, value in (
+            ("/proc/sys/vm/max_map_count", "1048576"),
+            ("/proc/sys/vm/overcommit_memory", "1"),
+        ):
+            try:
+                with open(key, "w", encoding="ascii") as f:
+                    f.write(value)
+            except OSError as exc:
+                logging.warning("could not set %s: %s", key, exc)
+
+    def _ensure_steam_client(
+        self, env: dict[str, str], launch_argv: list[str] | None = None
+    ) -> GuestResponse | None:
+        """Start the Steam client headless and let it settle (idempotent).
+
+        steamcmd/steam refuse to run usefully as root (G3.0 spike: error
+        13 creating caches); the agent runs as root, so drop to the steam
+        user. The client stays resident across calls — the VM is rebooted
+        between kernel builds anyway. The extracted client's steam.sh is
+        invoked directly, never the Debian wrapper (zenity hang, wrong
+        STEAMDIR).
+
+        `launch_argv` (e.g. ["-applaunch", "570", "-novid"]) is appended to
+        the FIRST client start. Verified 2026-07-01: the game only actually
+        launches when -applaunch rides the client's own startup — a bare
+        `-silent` client that receives the launch only via a later IPC
+        applaunch never spawns the game. The MangoHud env the game inherits
+        also has to be on this first start, not just the IPC call.
+        """
+        if self._steam_client_running():
+            return None
+        argv = ["runuser", "-u", STEAM_USER, "--", STEAM_SH, "-silent"]
+        if launch_argv:
+            argv.extend(launch_argv)
+        try:
+            subprocess.Popen(
+                argv,
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except FileNotFoundError:
+            return GuestResponse.error("runuser or steam.sh not found")
+        # Boot + CM logon + library reconcile, plus a possible one-time
+        # self-update restart. An -applaunch issued before the client is
+        # stably up is silently dropped by the update flow, so poll until
+        # the client process stays alive continuously for the stable
+        # window (not just present at a single instant).
+        deadline = time.monotonic() + STEAM_CLIENT_SETTLE_SECS
+        stable_since: float | None = None
+        while time.monotonic() < deadline:
+            if self._steam_client_running():
+                now = time.monotonic()
+                if stable_since is None:
+                    stable_since = now
+                elif now - stable_since >= STEAM_CLIENT_STABLE_SECS:
+                    return None
+            else:
+                # A drop resets the stability clock — the client is mid
+                # self-update restart.
+                stable_since = None
+            time.sleep(STEAM_CLIENT_POLL_SECS)
+        return GuestResponse.error(
+            f"steam client never stayed up for {STEAM_CLIENT_STABLE_SECS}s "
+            f"within {STEAM_CLIENT_SETTLE_SECS}s (crash-looping or update failure)"
+        )
 
     def _handle_launch_steam_benchmark(self, cmd: GuestCommand) -> GuestResponse:
         if cmd.app_id is None:
@@ -512,13 +697,17 @@ class GuestAgentHandler:
             return validated
         output_path, output_dir = validated
 
+        net_error = self._ensure_network()
+        if net_error is not None:
+            return net_error
+
+        self._raise_game_sysctls()
         self._ensure_gpu_module()
         client_env = self._ensure_weston()
         if isinstance(client_env, GuestResponse):
             return client_env
 
         duration = cmd.duration_secs or DEFAULT_LAUNCH_BENCHMARK_DURATION_SECS
-        log_duration = max(1, duration - 2)
         env = os.environ.copy()
         env.update(client_env)
         env.update({
@@ -526,23 +715,31 @@ class GuestAgentHandler:
             # explicit: Steam derives all its paths from HOME.
             "HOME": STEAM_HOME,
             "USER": STEAM_USER,
+            # The game process inherits the CLIENT's environment, not the
+            # -applaunch invocation's — MangoHud config must ride on the
+            # client start inside _ensure_steam_client.
             "MANGOHUD": "1",
             "MANGOHUD_CONFIG": (
-                f"output_folder={output_dir},autostart_log=1,"
-                f"log_duration={log_duration},log_interval=100"
+                f"output_folder={output_dir},"
+                f"autostart_log={STEAM_LOG_START_DELAY_SECS},"
+                f"log_duration={duration},log_interval=100"
             ),
         })
+
+        launch_argv = ["-applaunch", str(cmd.app_id), *(cmd.args or [])]
+        client_error = self._ensure_steam_client(env, launch_argv)
+        if client_error is not None:
+            return client_error
 
         pre_existing = set(output_dir.glob("*.csv"))
         psi_pre = _read_system_psi_avg10()
 
-        # steamcmd/steam refuse to run usefully as root (G3.0 spike:
-        # error 13 creating caches); the agent runs as root, so drop to
-        # the steam user. Steam stays resident after the game exits —
-        # fine, the VM is rebooted between kernel builds anyway.
+        # Second steam.sh invocation re-sends -applaunch to the running
+        # client over its IPC pipe — a retry in case the first (which rode
+        # the client startup) was dropped by a self-update restart.
         argv = [
             "runuser", "-u", STEAM_USER, "--",
-            "steam", "-applaunch", str(cmd.app_id), *(cmd.args or []),
+            STEAM_SH, *launch_argv,
         ]
         try:
             steam_proc = subprocess.Popen(
@@ -552,12 +749,18 @@ class GuestAgentHandler:
                 stderr=subprocess.DEVNULL,
             )
         except FileNotFoundError:
-            return GuestResponse.error("runuser or steam binary not found")
+            return GuestResponse.error("runuser or steam.sh not found")
 
-        # The CSV appears once MangoHud's log window closes; before that
-        # comes Steam boot + game load. Poll until the frame log exists
-        # and its size is stable across consecutive polls.
-        deadline = time.monotonic() + duration + STEAM_LAUNCH_GRACE_SECS
+        # The CSV appears when MangoHud's log window opens (rows stream in
+        # every log_interval; size goes stable once the window closes).
+        # Before that come Fossilize shader pre-processing and the asset
+        # load, both covered by the grace budget.
+        deadline = (
+            time.monotonic()
+            + STEAM_LOG_START_DELAY_SECS
+            + duration
+            + STEAM_LAUNCH_GRACE_SECS
+        )
         last_size = -1
         frame_log: Path | None = None
         while time.monotonic() < deadline:
@@ -579,9 +782,10 @@ class GuestAgentHandler:
 
         psi_post = _read_system_psi_avg10()
         if frame_log is None:
+            budget = STEAM_LOG_START_DELAY_SECS + duration + STEAM_LAUNCH_GRACE_SECS
             return GuestResponse.error(
-                f"no MangoHud log appeared within {duration + STEAM_LAUNCH_GRACE_SECS}s "
-                f"(steam pid {steam_proc.pid}, app {cmd.app_id})"
+                f"no MangoHud log appeared within {budget}s "
+                f"(applaunch pid {steam_proc.pid}, app {cmd.app_id})"
             )
         try:
             frame_log.rename(output_path)

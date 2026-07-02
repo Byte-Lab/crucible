@@ -35,7 +35,10 @@ max_stddev_pct = 10
 [agents]
 model = "claude-sonnet-4-20250514"
 max_retries = 3
-timeout_secs = 600
+# Steam mode's launch_steam_benchmark RPC blocks for client settle (240s) +
+# Fossilize shader pre-processing + asset load + the MangoHud log window —
+# ~1000s worst case. The GuestRpc socket timeout is derived from this value.
+timeout_secs = 1500
 # Per-call Anthropic `max_tokens` cap. Per-agent overrides below win when set.
 # Sized to keep a full cycle (5 calls) inside the org's 30k input-tokens/min cap.
 max_tokens = 4096

@@ -63,9 +63,13 @@ impl VmManager {
             }
         }
         qemu_opts.push_str(&format!(
-            "-device vhost-vsock-pci,guest-cid={}",
+            "-device vhost-vsock-pci,guest-cid={} ",
             self.config.vsock_cid
         ));
+        // Slirp userspace networking: the Steam client's CM logon needs a
+        // route out (the guest agent DHCPs the interface itself). Harmless
+        // for the synthetic loop — the NIC just sits idle.
+        qemu_opts.push_str("-netdev user,id=net0 -device virtio-net-pci,netdev=net0");
         let guest_cmd =
             "cd /opt/crucible && PYTHONPATH=/opt/crucible \
              exec python3 -m guest.crucible_guest_agent"
@@ -395,6 +399,9 @@ mod tests {
             joined
         );
         assert!(joined.contains("vhost-vsock-pci,guest-cid=3"));
+        // Slirp NIC for Steam CM logon (guest agent runs dhclient).
+        assert!(joined.contains("-netdev user,id=net0"));
+        assert!(joined.contains("virtio-net-pci,netdev=net0"));
         // --qemu-opts must use the `=` form so argparse accepts a value
         // that begins with `-`.
         assert!(joined.contains("--qemu-opts=-device "));

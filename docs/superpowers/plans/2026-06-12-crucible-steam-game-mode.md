@@ -43,20 +43,68 @@ on hardware 2026-06-12) proved end to end.
     hits 9,499 FPS on RADV NAVI31 with MangoHud writing the frame CSV
     through the Xwayland present path. Env recipe: `XDG_RUNTIME_DIR`
     (0700), `WAYLAND_DISPLAY=wayland-1`, `DISPLAY=:0`, ~6s weston warmup.
-- [ ] **G3.1 rootfs:** extend `setup-game-rootfs.sh` (or a new
-  `setup-steam-rootfs.sh` sharing rootfs-common) with: i386 multiarch,
-  `steam-installer` (non-free), `steamcmd`, `weston`, `xwayland`,
-  Vulkan/MangoHud i386 variants, the copied Steam session, and a
-  steamcmd-driven Dota 2 install. New stamp `.crucible-steam-built`.
-- [ ] **G3.2 guest:** weston-headless session management + Steam launch
-  handler; MangoHud env on the game process; demo-driven benchmark with
-  the existing finite-log-window rules; reuse fetch_file transport.
-- [ ] **G3.3 host:** profiler tools + prompt for the steam path;
-  game_selector lists installed Steam apps (steamapps/*.acf scan RPC);
-  `[measurement] mode = "steam"` (or `game_benchmark = "dota2"` variant)
-  threading.
-- [ ] **G3.4 e2e:** `CRUCIBLE_E2E_GAME=1` gate — full cycle on a real
-  game, non-zero fps, tool-leak scan.
+- [x] **G3.1 rootfs:** `setup-steam-rootfs.sh` — i386 multiarch,
+  `steam-installer`, `steamcmd`, `weston`, `xwayland`, Vulkan/MangoHud,
+  copied Steam session, steamcmd Dota 2 install, stamp
+  `.crucible-steam-built`. Hardened 2026-07-01: extracts the client
+  bootstrap tarball directly (never the zenity-hanging Debian wrapper);
+  writes `~/.steam/{steam,root}` symlinks; adds `dbus-x11` +
+  `isc-dhcp-client`; grants `video`+`render` groups; seeds full-client
+  login creds from `CRUCIBLE_STEAM_CLIENT_CREDS` (snap Steam) — steamcmd's
+  cached session alone does NOT log the full client in. Library-refresh
+  recipe (host steamcmd) documented in the header: the client refuses
+  `-applaunch` on an out-of-date app.
+- [x] **G3.2 guest:** `launch_steam_benchmark` handler. Fixes landed
+  2026-07-01: (1) DHCP the guest NIC before logon (`_ensure_network`);
+  (2) run weston as the **steam user**, not root — a root-owned Wayland
+  socket / X-auth cookie makes the crucible-user client segfault with
+  "Unable to open display"; (3) two-phase launch — start the client
+  `-silent`, poll until it stays up `STEAM_CLIENT_STABLE_SECS` (survives
+  the one-time self-update restart), then a second `steam.sh -applaunch`
+  over IPC; (4) raise `vm.max_map_count`/`overcommit_memory` for the
+  RADV+pressure-vessel VMA pressure; MangoHud `autostart_log` delay skips
+  the load screen.
+- [x] **G3.3 host:** profiler `launch_steam_benchmark`/`fetch_mangohud_log`
+  tools + no-fabrication prompt; game_selector returns the configured
+  title; `[measurement] mode = "steam"` + `steam_app_id` threading; slirp
+  netdev in `VmManager`; `[agents] timeout_secs` raised to 1500 for the
+  long Steam launch RPC.
+- [x] **G3.4 launch — SOLVED (2026-07-01):** `dota2` execs and renders on
+  RADV NAVI31 through the agent handler. The real blocker was the **launch
+  recipe**, not any resource limit: `-applaunch <id>` must ride the
+  **first** Steam client start (with the MangoHud env the game inherits) —
+  a bare `-silent` client that receives the launch only via a later IPC
+  `-applaunch` never spawns the game. Encoded in
+  `_ensure_steam_client(env, launch_argv)` + a second IPC applaunch retry.
+- [~] **G3.4 e2e:** `CRUCIBLE_E2E_GAME=1` gate wired (steam-mode cycle,
+  non-zero fps assert, 24G, tool-leak scan). Pending a clean end-to-end
+  green now that the game launches (needs the warm shader cache below).
+
+## Resolved: the "mmap wall" was a red herring (2026-07-01)
+
+Nine VM cycles chased a deterministic burst of `mmap() failed: Cannot
+allocate memory` (clustered with pressure-vessel `unsafe call to setenv`)
+as the launch blocker. It was **benign CEF/steamwebhelper logging** — it
+appears whether or not the game launches. Proof it was not the cause:
+moving the entire 75 GB Steam library onto an **ext4 virtio-blk image**
+(kernel rebuilt with `CONFIG_EXT4_FS=y`, qcow2 snapshot overlay) produced
+the identical mmap burst *and* the game launched once the recipe was
+fixed. Ruled out along the way: RAM (18.5 GB free at "failure"),
+`vm.max_map_count` (confirmed 1048576 in-guest), client version split,
+and the filesystem (ext4 == 9p behaviour). Lesson: `dota2` never appeared
+in `ps` because the launch was never *issued* correctly, not because it
+crashed — the console noise masked a control-flow bug. Kept the ext4
+kernel (harmless); shelved the block image (unneeded).
+
+## Open: warm shader cache for repeatable baselines
+
+Dota's first launch per boot runs a cold Fossilize shader pre-compile
+(minutes) before it renders, so MangoHud's log window can elapse before
+any frame — the baseline CSV comes back empty/zero. Fix in progress: bake
+a warmed `steamapps/shadercache/570` into the rootfs library (read-only
+9p lower layer) so every boot's overlay sees it pre-built and renders
+promptly. This is the concrete form of the plan's "baseline after warmup"
+step.
 
 ## Risks
 
