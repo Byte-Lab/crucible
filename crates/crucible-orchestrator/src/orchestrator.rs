@@ -22,6 +22,28 @@ const METRIC_DEFS: &[(&str, bool)] = &[
     ("psi_memory_avg", true),
 ];
 
+/// Mean of each metric across a phase's persisted rows, as the JSON blob
+/// the Analyzer consumes (its `metrics` context). Averaging the samples
+/// gives the analyzer a stable per-metric value instead of one noisy run.
+fn mean_metrics(measurements: &[Measurement]) -> serde_json::Value {
+    let mean = |metric: &str| -> f64 {
+        let s = metric_samples(measurements, metric);
+        if s.is_empty() {
+            0.0
+        } else {
+            s.iter().sum::<f64>() / s.len() as f64
+        }
+    };
+    serde_json::json!({
+        "fps_avg": mean("fps_avg"),
+        "fps_p1": mean("fps_p1"),
+        "frame_time_p99_ms": mean("frame_time_p99_ms"),
+        "psi_cpu_avg": mean("psi_cpu_avg"),
+        "psi_memory_avg": mean("psi_memory_avg"),
+        "samples": measurements.len(),
+    })
+}
+
 fn metric_samples(measurements: &[Measurement], metric: &str) -> Vec<f64> {
     measurements
         .iter()
@@ -74,6 +96,7 @@ pub fn measurement_context(
     config: &CrucibleConfig,
     phase: &str,
     game_name: &str,
+    capture_perfetto: bool,
 ) -> serde_json::Value {
     let mut context = serde_json::json!({
         "action": "measure",
@@ -92,13 +115,13 @@ pub fn measurement_context(
         context["mangohud_output"] = serde_json::json!(GUEST_MANGOHUD_OUTPUT);
         context["duration_secs"] =
             serde_json::json!(config.measurement.benchmark_duration_secs);
-        if phase == "baseline" {
-            // After the clean measurement run, the profiler repeats the
-            // workload once more under a Perfetto kernel-scheduler trace.
-            // Analyze runs BEFORE ComparisonMeasurement, so the trace must
-            // exist by the end of the baseline phase to inform this cycle's
-            // patch; the clean run stays unprofiled so tracing overhead
-            // can't skew the measured numbers.
+        if capture_perfetto {
+            // The profiled repeat runs the workload once more under a
+            // Perfetto kernel-scheduler trace; the orchestrator only sets
+            // this for a dedicated capture run in the baseline phase, never
+            // for the persisted measurement samples (tracing overhead would
+            // skew them). Analyze runs before ComparisonMeasurement, so the
+            // trace must exist by the end of the baseline phase.
             context["capture_perfetto"] = serde_json::json!(true);
             context["perfetto_output"] = serde_json::json!(GUEST_PERFETTO_OUTPUT);
             context["perfetto_host_dir"] =
@@ -481,6 +504,56 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// Run the profiler `runs_per_phase` times, persisting one measurement
+    /// row per run so the evaluator's Welch t-test has real samples (a
+    /// single aggregate row per phase makes every verdict Neutral). All
+    /// runs are clean — no Perfetto — so tracing overhead never enters the
+    /// measured distribution. Returns the number of samples persisted.
+    async fn measure_phase(
+        &mut self,
+        cycle_id: i64,
+        phase: &str,
+        game_name: &str,
+    ) -> Result<u32> {
+        let runs = self.config.measurement.runs_per_phase.max(1);
+        let mut persisted = 0u32;
+        for run in 0..runs {
+            let ctx = measurement_context(&self.config, phase, game_name, false);
+            let result = self.run_agent(AgentName::Profiler, ctx).await?;
+            match self.persist_measurement(cycle_id, phase, &result) {
+                Ok(()) => persisted += 1,
+                Err(e) => tracing::warn!(
+                    phase, run, error = %e, "measurement sample failed; continuing"
+                ),
+            }
+        }
+        if persisted == 0 {
+            anyhow::bail!("all {runs} {phase} measurement samples failed");
+        }
+        tracing::info!(phase, persisted, runs, "phase samples collected");
+        Ok(persisted)
+    }
+
+    /// One extra profiled run (Perfetto kernel trace) after the baseline
+    /// samples. Its frame numbers are discarded — only the trace matters.
+    /// Returns the host trace paths for the analyzer (empty on failure;
+    /// profiling is non-fatal).
+    async fn capture_profile(
+        &mut self,
+        game_name: &str,
+    ) -> Result<Vec<serde_json::Value>> {
+        let ctx = measurement_context(&self.config, "baseline", game_name, true);
+        let result = self.run_agent(AgentName::Profiler, ctx).await?;
+        let parsed = parse_agent_response(&result);
+        let traces = parsed
+            .get("collection_paths")
+            .and_then(|c| c.get("traces"))
+            .and_then(|t| t.as_array())
+            .cloned()
+            .unwrap_or_default();
+        Ok(traces)
+    }
+
     pub async fn run_cycle(&mut self) -> Result<()> {
         // SelectGame
         self.state_machine
@@ -531,12 +604,20 @@ impl Orchestrator {
             .update_cycle_status(cycle_id, CycleState::BaselineMeasurement.as_str())?;
         tracing::info!(state = %self.state_machine.state(), "running baseline measurement");
 
-        let baseline_context = measurement_context(&self.config, "baseline", game_name);
-        let baseline_result = self
-            .run_agent(AgentName::Profiler, baseline_context)
-            .await?;
-        self.persist_measurement(cycle_id, "baseline", &baseline_result)?;
-        let baseline_metrics = parse_agent_response(&baseline_result);
+        // Collect runs_per_phase clean samples, then one profiled run for
+        // the analyzer's kernel trace.
+        self.measure_phase(cycle_id, "baseline", game_name).await?;
+        let baseline_traces = match self.capture_profile(game_name).await {
+            Ok(t) => t,
+            Err(e) => {
+                tracing::warn!(error = %e, "profile capture failed; analyzing without a trace");
+                Vec::new()
+            }
+        };
+        // Metrics for the analyzer come from the persisted baseline rows,
+        // not a single run.
+        let baseline_rows = self.db.get_measurements(cycle_id, "baseline")?;
+        let baseline_metrics = mean_metrics(&baseline_rows);
 
         // Iteration loop: Analyze → GenerateOptimization → ApplyChanges →
         // ComparisonMeasurement → Evaluate. A Marginal verdict re-enters via
@@ -589,16 +670,12 @@ impl Orchestrator {
                 "metrics": baseline_metrics,
                 "attempt_number": attempt_number,
             });
-            // The profiled baseline repeat leaves a Perfetto kernel trace on
-            // the host (collection_paths.traces); hand it to the analyzer so
-            // bottleneck hunting is grounded in scheduler data, not just the
-            // summary metrics.
-            if let Some(traces) = baseline_metrics
-                .get("collection_paths")
-                .and_then(|c| c.get("traces"))
-                .filter(|t| t.is_array())
-            {
-                analyze_context["trace_paths"] = traces.clone();
+            // The profiled baseline run leaves a Perfetto kernel trace on
+            // the host; hand it to the analyzer so bottleneck hunting is
+            // grounded in scheduler data, not just the summary metrics.
+            if !baseline_traces.is_empty() {
+                analyze_context["trace_paths"] =
+                    serde_json::Value::Array(baseline_traces.clone());
             }
             if !previous_attempts.is_empty() {
                 analyze_context["previous_attempts"] =
@@ -729,12 +806,7 @@ impl Orchestrator {
                 "running comparison measurement"
             );
 
-            let comparison_context =
-                measurement_context(&self.config, "comparison", game_name);
-            let comparison_result = self
-                .run_agent(AgentName::Profiler, comparison_context)
-                .await?;
-            self.persist_measurement(cycle_id, "comparison", &comparison_result)?;
+            self.measure_phase(cycle_id, "comparison", game_name).await?;
 
             // Evaluate
             self.state_machine
@@ -1193,7 +1265,7 @@ mod tests {
     #[test]
     fn measurement_context_synthetic_omits_game_fields() {
         let orch = make_orchestrator();
-        let ctx = measurement_context(&orch.config, "baseline", "synthetic");
+        let ctx = measurement_context(&orch.config, "baseline", "synthetic", false);
         assert_eq!(ctx["phase"], "baseline");
         assert_eq!(ctx["workload_kind"], "synthetic");
         assert!(ctx.get("game_benchmark").is_none());
@@ -1218,7 +1290,9 @@ mod tests {
             [agents]
         "#;
         let config: CrucibleConfig = toml::from_str(toml_str).unwrap();
-        let ctx = measurement_context(&config, "comparison", "vkmark");
+        // capture_perfetto is now an explicit arg (the orchestrator sets it
+        // only for the dedicated profiled run), never phase-derived.
+        let ctx = measurement_context(&config, "comparison", "vkmark", false);
         assert_eq!(ctx["workload_kind"], "game");
         assert_eq!(ctx["game_benchmark"], "vkmark");
         assert_eq!(ctx["mangohud_output"], GUEST_MANGOHUD_OUTPUT);
@@ -1236,7 +1310,11 @@ mod tests {
         // repeat after the clean run) — not during comparison.
         assert!(ctx.get("capture_perfetto").is_none());
 
-        let baseline_ctx = measurement_context(&config, "baseline", "vkmark");
+        // Passing capture_perfetto=false keeps a game baseline sample clean;
+        // true adds the trace wiring (used only for the profiled capture run).
+        let clean_baseline = measurement_context(&config, "baseline", "vkmark", false);
+        assert!(clean_baseline.get("capture_perfetto").is_none());
+        let baseline_ctx = measurement_context(&config, "baseline", "vkmark", true);
         assert_eq!(baseline_ctx["capture_perfetto"], serde_json::json!(true));
         assert_eq!(baseline_ctx["perfetto_output"], GUEST_PERFETTO_OUTPUT);
         assert_eq!(baseline_ctx["perfetto_host_dir"], "/tmp/x");
