@@ -31,6 +31,15 @@ impl VmManager {
         self.state
     }
 
+    /// Where the vng/QEMU console is teed. Next to the kernel source so it is
+    /// easy to find; a stable name (append mode preserves reboot history).
+    fn boot_log_path(&self) -> std::path::PathBuf {
+        std::path::Path::new(&self.config.kernel_src)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("/tmp"))
+            .join("crucible-vm-boot.log")
+    }
+
     pub fn build_boot_command(
         &self,
         _kernel_path: &str,
@@ -264,13 +273,43 @@ impl VmManager {
             self.build_boot_command(kernel_path, &vfio_functions, module_overlay.as_deref());
         tracing::info!(kernel = kernel_path, cmd = %cmd_args.join(" "), "booting VM");
 
+        // Capture the vng/QEMU console to a file. Previously stdout/stderr
+        // were piped and never read — an unread pipe can wedge the child when
+        // the buffer fills, and worse, a boot failure (QEMU vfio error, guest
+        // amdgpu hang, kernel panic) left no diagnostic at all: the only
+        // symptom was a downstream vsock "No such device" from wait_for_ready.
+        // Append mode keeps every boot in one file so a reboot's console is
+        // not clobbered by the next attempt.
+        let boot_log_path = self.boot_log_path();
+        {
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&boot_log_path)
+            {
+                let _ = writeln!(
+                    f,
+                    "\n===== crucible boot: kernel={kernel_path} =====",
+                );
+            }
+        }
+        let boot_log = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&boot_log_path)
+            .with_context(|| format!("failed to open boot log {boot_log_path:?}"))?;
+        let boot_log_err = boot_log
+            .try_clone()
+            .context("failed to clone boot-log handle for stderr")?;
+
         let mut command = Command::new(&cmd_args[0]);
         command
             .args(&cmd_args[1..])
             .current_dir(&self.config.kernel_src)
             .stdin(std::process::Stdio::null())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::from(boot_log))
+            .stderr(std::process::Stdio::from(boot_log_err))
             // If the orchestrator crashes or the test panics, send SIGKILL
             // to vng/QEMU so it doesn't keep CID 3 reserved on the host.
             // kill_on_drop alone is not enough: vng wraps virtme-run in a
@@ -318,10 +357,12 @@ impl VmManager {
             // Kill the whole process group (vng → sh -c → virtme-run →
             // qemu); killing only the direct child leaves QEMU running and
             // holding the vsock CID.
-            if let Some(pid) = child.id() {
+            let pgid = child.id().map(|pid| {
                 // pid is u32; clamp before negating so the cast can never
                 // overflow to i32::MIN (whose meaning kill() reserves).
-                let pgid = -(pid.min(i32::MAX as u32) as i32);
+                -(pid.min(i32::MAX as u32) as i32)
+            });
+            if let Some(pgid) = pgid {
                 // SAFETY: plain libc kill on a pgid we created via
                 // process_group(0); no memory at stake.
                 let ret = unsafe { libc::kill(pgid, libc::SIGKILL) };
@@ -342,10 +383,49 @@ impl VmManager {
                 .wait()
                 .await
                 .context("failed to wait for VM process")?;
+
+            // child.wait() reaps only the direct vng wrapper. The QEMU
+            // grandchild vng spawned lives in the same process group and
+            // dies asynchronously after the group SIGKILL — and until it
+            // does, it holds the passthrough GPU's /dev/vfio/<group> open.
+            // Booting the next VM before that release fails hard with
+            //   vfio: Could not open '/dev/vfio/N': Device or resource busy
+            // which is exactly how a kernel-patch reboot lost the GPU. Wait
+            // for the whole group to drain (kill(-pgid, 0) → ESRCH) before
+            // returning, so the vfio group fd is free for the next boot.
+            if let Some(pgid) = pgid {
+                Self::wait_for_process_group_exit(pgid, Duration::from_secs(15)).await;
+                // fds close on process death before reap; a short settle
+                // covers any residual vfio-group teardown in the kernel.
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            }
         }
         self.child = None;
         self.state = VmState::Stopped;
         Ok(())
+    }
+
+    /// Poll until no process remains in `pgid`'s group (or `timeout`).
+    /// `kill(pgid, 0)` returns 0 while any group member is alive and fails
+    /// with ESRCH once the group is empty.
+    async fn wait_for_process_group_exit(pgid: i32, timeout: Duration) {
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            // SAFETY: signal 0 is a permission/existence probe, sends nothing.
+            let alive = unsafe { libc::kill(pgid, 0) } == 0;
+            if !alive {
+                return;
+            }
+            if std::time::Instant::now() >= deadline {
+                tracing::warn!(
+                    pgid,
+                    "VM process group still alive after drain timeout; \
+                     next boot may hit a busy vfio device"
+                );
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
     }
 }
 
