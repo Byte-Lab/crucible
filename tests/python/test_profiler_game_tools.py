@@ -259,3 +259,120 @@ def test_fetch_perfetto_trace_error_when_guest_fails():
     result = registry.call("fetch_perfetto_trace", {})
     assert result["status"] == "error"
     assert "not allowed" in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# First-party benchmark frame logs (Civ 6 Logs/Benchmark-*.csv)
+# ---------------------------------------------------------------------------
+
+
+def test_parse_frametime_csv_computes_per_frame_stats():
+    from agents.profiler.tools import parse_frametime_csv
+
+    # 98 fast frames + 2 slow: nearest-rank p99 (idx 98 of 100) must
+    # surface the stall.
+    text = "\n".join(["10.0"] * 98 + ["100.0"] * 2)
+    stats = parse_frametime_csv(text)
+    assert stats["frame_count"] == 100
+    assert abs(stats["fps_avg"] - 1000.0 * 100 / (98 * 10.0 + 200.0)) < 1e-9
+    assert stats["frametime_p99_ms"] == 100.0
+    assert abs(stats["fps_p1"] - 10.0) < 1e-9
+
+
+def test_parse_frametime_csv_tolerates_junk_and_empty():
+    from agents.profiler.tools import parse_frametime_csv
+
+    stats = parse_frametime_csv("header\n\n16.6\nnot-a-number\n33.3\n")
+    assert stats["frame_count"] == 2
+    empty = parse_frametime_csv("")
+    assert empty["frame_count"] == 0
+    assert empty["fps_avg"] == 0.0
+
+
+def test_fetch_firstparty_frametimes_parses_guest_file():
+    calls = {}
+
+    class FakeRpc:
+        def call(self, cmd, args):
+            calls[cmd] = args
+            payload = base64.b64encode(b"20.0\n20.0\n40.0\n").decode()
+            return {
+                "status": "ok",
+                "data": {"contents_b64": payload, "truncated": False},
+            }
+
+    from agents.profiler.game_tools import make_profiler_game_tools
+
+    registry = ToolRegistry()
+    make_profiler_game_tools(registry, FakeRpc())
+    result = registry.call(
+        "fetch_firstparty_frametimes",
+        {"log_path": "/tmp/crucible_mangohud_firstparty.csv"},
+    )
+    assert calls["fetch_file"]["path"] == "/tmp/crucible_mangohud_firstparty.csv"
+    assert result["frame_count"] == 3
+    assert result["frametime_p99_ms"] == 40.0
+
+
+def test_profiler_steam_user_message_prefers_firstparty_log():
+    from uuid import uuid4
+
+    from agents.common.protocol import AgentConfig, TaskEnvelope
+    from agents.profiler.agent import ProfilerAgent
+
+    task = TaskEnvelope(
+        task_id=uuid4(),
+        agent="profiler",
+        context={
+            "phase": "baseline",
+            "game": "civ6",
+            "workload_kind": "steam",
+            "steam_app_id": 289070,
+            "duration_secs": 120,
+            "mangohud_output": "/tmp/crucible_mangohud.csv",
+        },
+        config=AgentConfig(model="m", max_tokens=1, timeout_seconds=1),
+    )
+    msg = ProfilerAgent().build_user_message(task)
+    assert "fetch_firstparty_frametimes" in msg
+    assert "firstparty_log" in msg
+    # Mixed methodologies corrupt a phase: harvest failure on a
+    # firstparty-expected title must fail the run, never silently fall
+    # back to MangoHud sampling.
+    assert "firstparty_expected" in msg
+    assert "Do NOT fall back" in msg
+    assert "metrics_source" in msg
+    # No perfetto steps without capture_perfetto.
+    assert "start_profiling" not in msg
+
+
+def test_profiler_steam_user_message_profiled_run_traces_single_launch():
+    from uuid import uuid4
+
+    from agents.common.protocol import AgentConfig, TaskEnvelope
+    from agents.profiler.agent import ProfilerAgent
+
+    task = TaskEnvelope(
+        task_id=uuid4(),
+        agent="profiler",
+        context={
+            "phase": "baseline",
+            "game": "civ6",
+            "workload_kind": "steam",
+            "steam_app_id": 289070,
+            "duration_secs": 120,
+            "mangohud_output": "/tmp/crucible_mangohud.csv",
+            "capture_perfetto": True,
+            "perfetto_output": "/tmp/crucible_trace.perfetto-trace",
+            "perfetto_host_dir": "/home/void/.crucible/civ6-grind-artifacts",
+        },
+        config=AgentConfig(model="m", max_tokens=1, timeout_seconds=1),
+    )
+    msg = ProfilerAgent().build_user_message(task)
+    assert "start_profiling" in msg
+    assert "buffer_size_kb=6144" in msg
+    assert "stop_profiling" in msg
+    assert "fetch_perfetto_trace" in msg
+    # Single launch: start_profiling comes before the (only) launch call.
+    assert msg.index("start_profiling") < msg.index("launch_steam_benchmark")
+    assert msg.count("launch_steam_benchmark(app_id=") == 1

@@ -169,12 +169,13 @@ impl Database {
         frame_time_p99_ms: f64,
         psi_cpu_avg: f64,
         psi_memory_avg: f64,
+        custom_json: &str,
     ) -> Result<i64> {
         self.conn.execute(
             "INSERT INTO measurements \
-             (cycle_id, phase, fps_avg, fps_p1, frame_time_p99_ms, psi_cpu_avg, psi_memory_avg) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![cycle_id, phase, fps_avg, fps_p1, frame_time_p99_ms, psi_cpu_avg, psi_memory_avg],
+             (cycle_id, phase, fps_avg, fps_p1, frame_time_p99_ms, psi_cpu_avg, psi_memory_avg, custom_json) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+            params![cycle_id, phase, fps_avg, fps_p1, frame_time_p99_ms, psi_cpu_avg, psi_memory_avg, custom_json],
         )?;
         Ok(self.conn.last_insert_rowid())
     }
@@ -338,9 +339,9 @@ mod tests {
     fn insert_and_query_measurement() {
         let db = test_db();
         let cycle_id = db.create_cycle("test_game", 12345).unwrap();
-        db.insert_measurement(cycle_id, "baseline", 60.0, 45.0, 25.0, 0.5, 1.2)
+        db.insert_measurement(cycle_id, "baseline", 60.0, 45.0, 25.0, 0.5, 1.2, "{}")
             .unwrap();
-        db.insert_measurement(cycle_id, "baseline", 62.0, 47.0, 24.0, 0.4, 1.1)
+        db.insert_measurement(cycle_id, "baseline", 62.0, 47.0, 24.0, 0.4, 1.1, "{}")
             .unwrap();
         let measurements = db.get_measurements(cycle_id, "baseline").unwrap();
         assert_eq!(measurements.len(), 2);

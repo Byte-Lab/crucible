@@ -73,26 +73,80 @@ Respond with JSON: {"fps_avg": <float>, "fps_p1": <float>, "frame_time_p99_ms": 
             # steam_launch_args (e.g. Civ 6's built-in graphics benchmark).
             # Empty args launch the title bare.
             args = list(context.get("steam_launch_args") or [])
-            msg = (
-                f"Collect {phase} measurements from the Steam title.\n"
-                f"1. Call launch_steam_benchmark(app_id={steam_app_id}, "
+            capture_perfetto = bool(context.get("capture_perfetto"))
+            perfetto_output = context.get(
+                "perfetto_output", "/tmp/crucible_trace.perfetto-trace"
+            )
+            perfetto_host_dir = context.get("perfetto_host_dir", "/tmp")
+            step = 1
+            lines = [f"Collect {phase} measurements from the Steam title."]
+            if capture_perfetto:
+                # This invocation exists for the kernel trace: the launch
+                # itself runs under the capture (its frame numbers are
+                # discarded by the orchestrator), so no second launch is
+                # needed — a Steam relaunch costs minutes.
+                lines.append(
+                    f"{step}. Call start_profiling(duration_secs=600, "
+                    f"output={perfetto_output!r}, buffer_size_kb=6144). The "
+                    "small ring buffer keeps the trace under the vsock "
+                    "fetch cap while covering the benchmark scene at the "
+                    "end of the run."
+                )
+                step += 1
+            lines.append(
+                f"{step}. Call launch_steam_benchmark(app_id={steam_app_id}, "
                 f"args={args!r}, mangohud_output={mangohud_output!r}, "
                 f"duration_secs={duration}) exactly once. It launches the "
                 "game under weston-headless + MangoHud and blocks until the "
-                "frame log is complete (game load can take minutes).\n"
-                f"2. Call fetch_mangohud_log(log_path={mangohud_output!r}) to "
-                "retrieve frame statistics.\n"
+                "frame log is complete (game load can take minutes)."
+            )
+            step += 1
+            if capture_perfetto:
+                lines.append(
+                    f"{step}. Call stop_profiling(), then "
+                    f"fetch_perfetto_trace(trace_path={perfetto_output!r}, "
+                    f"host_output_dir={perfetto_host_dir!r})."
+                )
+                step += 1
+            lines.append(
+                f"{step}. Pick ONE frame-statistics source — phases must "
+                "never mix methodologies:\n"
+                "   - firstparty_log non-empty: call "
+                "fetch_firstparty_frametimes(log_path=<that value>) and use "
+                "its statistics (per-frame, exactly scoped to the benchmark "
+                "scene). Set metrics_source to \"firstparty\".\n"
+                "   - firstparty_log empty but firstparty_expected true: "
+                "this run FAILED. Do NOT fall back to MangoHud (its "
+                "load-screen stalls use a different methodology and would "
+                "corrupt the phase statistics): respond "
+                '{"error": "firstparty log missing: <details>"}.\n'
+                "   - firstparty_expected false: call fetch_mangohud_log("
+                f"log_path={mangohud_output!r}) and use its statistics. "
+                "Set metrics_source to \"mangohud\"."
+            )
+            step += 1
+            collection = (
+                f'{{"traces": ["<host_path from fetch_perfetto_trace>"], '
+                f'"mangohud": {mangohud_output!r}}}'
+                if capture_perfetto
+                else f'{{"mangohud": {mangohud_output!r}}}'
+            )
+            lines.append(
                 "Then emit the final JSON object from the system prompt with:\n"
-                "  fps_avg = fps_avg from fetch_mangohud_log\n"
-                "  fps_p1 = fps_p1 from fetch_mangohud_log\n"
-                "  frame_time_p99_ms = frametime_p99_ms from fetch_mangohud_log\n"
+                "  fps_avg = fps_avg from the chosen frame statistics\n"
+                "  fps_p1 = fps_p1 from the chosen frame statistics\n"
+                "  frame_time_p99_ms = frametime_p99_ms from the chosen "
+                "frame statistics\n"
                 "  psi_cpu_avg = psi_cpu_delta from launch_steam_benchmark\n"
                 "  psi_memory_avg = psi_memory_delta from launch_steam_benchmark\n"
-                f'Set collection_paths to {{"mangohud": {mangohud_output!r}}}.\n'
-                "If either tool returns an error or log_found is false, do "
+                "  metrics_source = \"firstparty\" or \"mangohud\" per the "
+                "source you used\n"
+                f"Set collection_paths to {collection}.\n"
+                "If the tools return errors or log_found is false, do "
                 "NOT invent metrics and do NOT emit zeros: respond with "
                 '{"error": "<what failed and the exact tool error>"} instead.'
             )
+            msg = "\n".join(lines)
             if hypothesis:
                 msg = f"Hypothesis: {hypothesis}\n" + msg
             return msg

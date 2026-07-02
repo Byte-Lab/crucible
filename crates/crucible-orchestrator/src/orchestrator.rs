@@ -135,6 +135,16 @@ pub fn measurement_context(
         context["mangohud_output"] = serde_json::json!(GUEST_MANGOHUD_OUTPUT);
         context["duration_secs"] =
             serde_json::json!(config.measurement.benchmark_duration_secs);
+        if capture_perfetto {
+            // Same contract as game mode: only the dedicated profiled
+            // repeat in the baseline phase carries this. Without it the
+            // analyzer gets no kernel trace in steam mode and reasons
+            // blind from the summary metrics.
+            context["capture_perfetto"] = serde_json::json!(true);
+            context["perfetto_output"] = serde_json::json!(GUEST_PERFETTO_OUTPUT);
+            context["perfetto_host_dir"] =
+                serde_json::json!(config.orchestrator.artifact_dir);
+        }
     } else {
         context["benchmark_args"] = serde_json::json!(config.measurement.benchmark_args);
         context["duration_secs"] =
@@ -508,6 +518,16 @@ impl Orchestrator {
             );
         }
 
+        // Provenance for post-hoc triage: which frame-stat methodology
+        // produced this sample (steam mode: "firstparty" per-frame log vs
+        // "mangohud" 100ms samples — the two compute fps_p1/p99 differently
+        // and must never mix within a phase).
+        let metrics_source = parsed
+            .get("metrics_source")
+            .and_then(|v| v.as_str())
+            .unwrap_or("unspecified");
+        let custom = serde_json::json!({ "metrics_source": metrics_source }).to_string();
+
         let id = self.db.insert_measurement(
             cycle_id,
             phase,
@@ -516,13 +536,14 @@ impl Orchestrator {
             frame_time_p99_ms,
             psi_cpu_avg,
             psi_memory_avg,
+            &custom,
         )?;
         tracing::info!(
             cycle_id,
             phase,
             measurement_id = id,
             fps_avg,
-            psi_cpu_avg,
+            metrics_source,
             "measurement persisted"
         );
         Ok(())
@@ -927,13 +948,25 @@ impl Orchestrator {
             Verdict::Accept | Verdict::Marginal | Verdict::Neutral => CycleState::Accept,
             Verdict::Regressed => CycleState::Reject,
         };
-        if matches!(overall, Verdict::Regressed) {
-            if let Some(p) = applied_patch.as_deref() {
-                match self.kernel_builder.revert_patch().await {
-                    Ok(()) => tracing::info!(patch = p, "patch reverted on reject"),
-                    Err(e) => tracing::warn!(patch = p, error = %e, "revert_patch failed on reject"),
+        if let Some(p) = applied_patch.as_deref() {
+            // Corpus independence: every cycle's patch is measured against
+            // the BASE kernel. Reverting only on Regressed left the source
+            // patched on Accept/Neutral, and — worse — the VM kept running
+            // the patched image either way, so the next cycle's baseline
+            // silently measured patch N instead of base (each verdict then
+            // compares patch N+1 against patch N, not against base). The
+            // diff itself persists in .crucible_patches/.
+            match self.kernel_builder.revert_patch().await {
+                Ok(()) => tracing::info!(patch = p, verdict = %overall, "patch reverted at cycle end"),
+                Err(e) => {
+                    tracing::warn!(patch = p, error = %e, "revert_patch failed at cycle end")
                 }
             }
+            if let Err(e) = self.vm_manager.shutdown().await {
+                tracing::warn!(error = %e, "VM shutdown failed at cycle end");
+            }
+            // Force a base-kernel rebuild + fresh boot on the next cycle.
+            self.current_kernel = None;
         }
         self.state_machine
             .transition(next)
@@ -973,6 +1006,17 @@ impl Orchestrator {
                 Err(e) => {
                     tracing::error!(error = %e, "cycle failed, resetting state machine");
                     self.state_machine = StateMachine::new();
+                    // A cycle can die after apply_and_build succeeded: the
+                    // source is patched and the VM (if alive) runs the
+                    // patched image. Scrub both so the next cycle's
+                    // baseline is really the base kernel.
+                    if let Err(re) = self.kernel_builder.revert_patch().await {
+                        tracing::debug!(error = %re, "post-failure revert_patch (often nothing to revert)");
+                    }
+                    if let Err(se) = self.vm_manager.shutdown().await {
+                        tracing::warn!(error = %se, "post-failure VM shutdown failed");
+                    }
+                    self.current_kernel = None;
                     let backoff = self.config.orchestrator.failure_cooldown_secs;
                     if backoff > 0 {
                         tracing::warn!(
@@ -997,6 +1041,13 @@ impl Orchestrator {
             }
         }
 
+        // The vng wrapper dies with the process (kill_on_drop), but the
+        // QEMU grandchild survives it and keeps the GPU's /dev/vfio group
+        // open — observed leaking after a clean --single-cycle exit.
+        // shutdown() kills and drains the whole process group.
+        if let Err(e) = self.vm_manager.shutdown().await {
+            tracing::warn!(error = %e, "final VM shutdown failed");
+        }
         tracing::info!(total_cycles = cycles_completed, "orchestrator loop finished");
         Ok(())
     }
@@ -1329,7 +1380,7 @@ mod tests {
     fn insert_phase(orch: &Orchestrator, cycle_id: i64, phase: &str, samples: &[(f64, f64, f64, f64, f64)]) {
         for (fps, fps_p1, ft, cpu, mem) in samples {
             orch.db
-                .insert_measurement(cycle_id, phase, *fps, *fps_p1, *ft, *cpu, *mem)
+                .insert_measurement(cycle_id, phase, *fps, *fps_p1, *ft, *cpu, *mem, "{}")
                 .unwrap();
         }
     }
@@ -1474,6 +1525,37 @@ mod tests {
         assert_eq!(baseline_ctx["capture_perfetto"], serde_json::json!(true));
         assert_eq!(baseline_ctx["perfetto_output"], GUEST_PERFETTO_OUTPUT);
         assert_eq!(baseline_ctx["perfetto_host_dir"], "/tmp/x");
+    }
+
+    #[test]
+    fn measurement_context_steam_threads_perfetto_for_profiled_run() {
+        let toml_str = r#"
+            [orchestrator]
+            db_path = "/tmp/x.db"
+            artifact_dir = "/tmp/x"
+            [vm]
+            kernel_src = "/tmp/k"
+            guest_rootfs = "/tmp/r"
+            vfio_device = "none"
+            [measurement]
+            mode = "steam"
+            steam_app_id = 289070
+            steam_launch_args = ["-benchmark", "graphicsbenchmark"]
+            [agents]
+        "#;
+        let config: CrucibleConfig = toml::from_str(toml_str).unwrap();
+
+        let clean = measurement_context(&config, "baseline", "civ6", false);
+        assert_eq!(clean["workload_kind"], "steam");
+        assert_eq!(clean["steam_app_id"], 289070);
+        assert!(clean.get("capture_perfetto").is_none());
+
+        // Without this the steam analyzer gets no kernel trace and reasons
+        // blind from summary metrics (observed cycle 2 of the Civ 6 grind).
+        let profiled = measurement_context(&config, "baseline", "civ6", true);
+        assert_eq!(profiled["capture_perfetto"], serde_json::json!(true));
+        assert_eq!(profiled["perfetto_output"], GUEST_PERFETTO_OUTPUT);
+        assert_eq!(profiled["perfetto_host_dir"], "/tmp/x");
     }
 
     #[test]

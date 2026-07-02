@@ -70,6 +70,57 @@ def parse_mangohud_csv(csv_text: str) -> dict[str, Any]:
     }
 
 
+def parse_frametime_csv(csv_text: str) -> dict[str, Any]:
+    """Parse a first-party benchmark frame log: one frametime-in-ms per line.
+
+    Civ 6's built-in benchmarks write this shape (no header, no extra
+    columns). Unlike the MangoHud log — 100ms *samples* over a timing-guess
+    window that inevitably catches multi-second load-screen stalls — this
+    is per-frame and exactly scoped to the benchmark scene, so its
+    percentiles are the trustworthy ones.
+    """
+    frametimes: list[float] = []
+    for line in csv_text.splitlines():
+        field = line.split(",", 1)[0].strip()
+        if not field:
+            continue
+        try:
+            value = float(field)
+        except ValueError:
+            continue  # tolerate a stray header or footer row
+        if value > 0.0:
+            frametimes.append(value)
+
+    if not frametimes:
+        return {
+            "frame_count": 0,
+            "fps_avg": 0.0,
+            "fps_p1": 0.0,
+            "frametime_p50_ms": 0.0,
+            "frametime_p95_ms": 0.0,
+            "frametime_p99_ms": 0.0,
+        }
+
+    ft_sorted = sorted(frametimes)
+    count = len(ft_sorted)
+
+    def percentile(data: list[float], p: float) -> float:
+        idx = max(0, math.ceil(len(data) * p / 100.0) - 1)
+        return data[idx]
+
+    total_ms = sum(frametimes)
+    p99_ms = percentile(ft_sorted, 99)
+    return {
+        "frame_count": count,
+        "fps_avg": 1000.0 * count / total_ms,
+        # fps_p1 = the frame rate of the 1%-worst frame = 1000 / p99 frametime.
+        "fps_p1": 1000.0 / p99_ms,
+        "frametime_p50_ms": percentile(ft_sorted, 50),
+        "frametime_p95_ms": percentile(ft_sorted, 95),
+        "frametime_p99_ms": p99_ms,
+    }
+
+
 def _parse_psi_file(path: str) -> dict[str, float] | None:
     """Read a PSI file and parse avg10/avg60/avg300 values from the 'some' line."""
     try:
@@ -105,11 +156,17 @@ def make_profiler_tools(registry: ToolRegistry, guest_rpc: Any) -> None:
         duration_secs: int = 30,
         output: str = "/tmp/crucible_trace.perfetto-trace",
         perfetto_config: str = "",
+        buffer_size_kb: int = 0,
     ) -> dict:
         if guest_rpc is not None:
             config: dict[str, Any] = {"output": output}
             if perfetto_config:
                 config["trace_config"] = perfetto_config
+            if buffer_size_kb:
+                # Shrink the ring buffer so a minutes-long capture (Steam
+                # load + benchmark) still fits fetch_file's 8 MiB cap: the
+                # ring keeps the newest events — the benchmark scene.
+                config["buffer_size_kb"] = buffer_size_kb
             try:
                 result = guest_rpc.call("start_profiling", {
                     "duration_secs": duration_secs,

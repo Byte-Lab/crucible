@@ -711,3 +711,86 @@ def test_launch_steam_benchmark_times_out_without_log(handler, monkeypatch, tmp_
     )
     assert resp.status == "error"
     assert "no mangohud log" in resp.message.lower()
+
+
+# ---------------------------------------------------------------------------
+# First-party benchmark log harvest (Civ 6 Logs/Benchmark-*.csv)
+# ---------------------------------------------------------------------------
+
+
+def test_harvest_firstparty_log_copies_new_stable_file(handler, monkeypatch, tmp_path):
+    import guest.crucible_guest_agent as mod
+
+    steam_home = tmp_path / "steam-home"
+    logs = steam_home / "Logs"
+    logs.mkdir(parents=True)
+    monkeypatch.setattr(mod, "STEAM_HOME", str(steam_home))
+    monkeypatch.setattr(mod, "FIRSTPARTY_LOG_WAIT_SECS", 10)
+
+    stale = logs / "Benchmark-old.csv"
+    stale.write_text("99.9\n")
+    pre = {stale}
+
+    fresh = logs / "Benchmark-new.csv"
+    fresh.write_text("16.6\n33.3\n")
+
+    out_dir = tmp_path / "out"
+    out_dir.mkdir()
+    mangohud_output = out_dir / "crucible_mangohud.csv"
+
+    dest = handler._harvest_firstparty_log("Logs/Benchmark-*.csv", pre, mangohud_output)
+    assert dest == str(out_dir / "crucible_mangohud_firstparty.csv")
+    assert (out_dir / "crucible_mangohud_firstparty.csv").read_text() == "16.6\n33.3\n"
+
+
+def test_harvest_firstparty_log_returns_empty_when_no_new_file(
+    handler, monkeypatch, tmp_path
+):
+    import guest.crucible_guest_agent as mod
+
+    steam_home = tmp_path / "steam-home"
+    (steam_home / "Logs").mkdir(parents=True)
+    monkeypatch.setattr(mod, "STEAM_HOME", str(steam_home))
+    monkeypatch.setattr(mod, "FIRSTPARTY_LOG_WAIT_SECS", 3)
+
+    dest = handler._harvest_firstparty_log(
+        "Logs/Benchmark-*.csv", set(), tmp_path / "crucible_mangohud.csv"
+    )
+    assert dest == ""
+
+
+def test_start_profiling_buffer_size_override(handler, monkeypatch):
+    import io
+
+    import guest.crucible_guest_agent as mod
+
+    captured = {"config": b""}
+
+    class FakeStdin(io.BytesIO):
+        def close(self):
+            captured["config"] = self.getvalue()
+            super().close()
+
+    class FakeProc:
+        pid = 4242
+        stdin = FakeStdin()
+
+        def poll(self):
+            return None
+
+    monkeypatch.setattr(
+        mod.GuestAgentHandler, "_ensure_perfetto_daemons", lambda self: None
+    )
+    monkeypatch.setattr(mod.subprocess, "Popen", lambda *a, **kw: FakeProc())
+
+    cmd = GuestCommand(
+        cmd="start_profiling",
+        duration_secs=60,
+        config={"output": "/tmp/t.trace", "buffer_size_kb": 6144},
+    )
+    resp = handler._handle_start_profiling(cmd)
+    assert resp.status == "ok", resp.message
+    text = captured["config"].decode()
+    assert "duration_ms: 60000" in text
+    assert "size_kb: 6144" in text
+    assert "size_kb: 131072" not in text

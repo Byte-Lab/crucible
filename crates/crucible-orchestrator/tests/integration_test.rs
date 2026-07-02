@@ -69,7 +69,7 @@ async fn full_round_trip_echo_agent_to_db() {
     assert_eq!(result.result["echo"]["game"], "test_game");
 
     // 5. Store a measurement as if the agent had produced one
-    db.insert_measurement(cycle_id, "baseline", 60.0, 45.0, 25.0, 0.5, 1.2)
+    db.insert_measurement(cycle_id, "baseline", 60.0, 45.0, 25.0, 0.5, 1.2, "{}")
         .unwrap();
     db.update_cycle_status(cycle_id, "baseline_measurement")
         .unwrap();

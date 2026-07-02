@@ -10,6 +10,7 @@ import logging
 import os
 import pwd
 import re
+import shutil
 import signal
 import socket
 import struct
@@ -151,6 +152,23 @@ STEAM_LOG_START_DELAY_SECS = 60
 # overlay) and the 68G asset load over 9p. The CSV wait budget is
 # log-start delay + duration + this grace.
 STEAM_LAUNCH_GRACE_SECS = 600
+# Titles whose built-in benchmark writes its own per-frame log. The
+# MangoHud window is a timing guess (autostart_log delay) that inevitably
+# catches load-screen stalls — 10-19s "frames" that poison fps_p1 and
+# frame_time_p99 (observed 2026-07-02 with Civ 6 graphicsbenchmark). The
+# first-party log is exactly scoped to the benchmark scene and per-frame,
+# so the profiler prefers it when the handler finds one. Keyed by app_id;
+# glob is relative to the steam user's HOME.
+STEAM_FIRSTPARTY_BENCHMARK_GLOBS: dict[int, str] = {
+    # Civ 6: all three -benchmark modes (graphicsbenchmark, xp2benchmark,
+    # aibenchmark) write Logs/Benchmark-<timestamp>.csv — one bare
+    # frametime-in-ms per line, no header.
+    289070: ".local/share/aspyr-media/Sid Meier's Civilization VI/Logs/Benchmark-*.csv",
+}
+# The first-party log is written by the game during/after the benchmark
+# scene; poll it for size-stability this long after the MangoHud log
+# settles before giving up (the benchmark may still be mid-flythrough).
+FIRSTPARTY_LOG_WAIT_SECS = 300
 WESTON_WARMUP_SECS = 6
 # Steam's CM logon needs a route out. vng's slirp netdev provides one,
 # but the minimal rootfs runs no network manager — the agent DHCPs the
@@ -415,6 +433,15 @@ class GuestAgentHandler:
         # -c together with --time, so the capture bound (protecting against
         # a lost stop_profiling) is a duration_ms line inside the config.
         trace_config = config.get("trace_config", PERFETTO_KERNEL_CONFIG)
+        # Long captures (Steam profiled repeat: minutes of load + benchmark)
+        # must fit fetch_file's 8 MiB cap. A small RING_BUFFER keeps only
+        # the newest events — the benchmark scene at the end of the run —
+        # and bounds the output file to roughly the buffer size.
+        buffer_kb = config.get("buffer_size_kb")
+        if buffer_kb:
+            trace_config = re.sub(
+                r"size_kb: \d+", f"size_kb: {int(buffer_kb)}", trace_config, count=1
+            )
         trace_config = f"duration_ms: {int(duration) * 1000}\n" + trace_config
         try:
             client_log = open("/tmp/crucible_perfetto.log", "wb")
@@ -975,6 +1002,11 @@ class GuestAgentHandler:
         if client_error is not None:
             return client_error
 
+        firstparty_glob = STEAM_FIRSTPARTY_BENCHMARK_GLOBS.get(cmd.app_id)
+        firstparty_pre: set[Path] = set()
+        if firstparty_glob is not None:
+            firstparty_pre = set(Path(STEAM_HOME).glob(firstparty_glob))
+
         pre_existing = set(output_dir.glob("*.csv"))
         psi_pre = _read_system_psi_avg10()
 
@@ -1036,6 +1068,12 @@ class GuestAgentHandler:
         except OSError as exc:
             return GuestResponse.error(f"cannot move MangoHud log: {exc}")
 
+        firstparty_out = ""
+        if firstparty_glob is not None:
+            firstparty_out = self._harvest_firstparty_log(
+                firstparty_glob, firstparty_pre, output_path
+            )
+
         def delta(resource: str) -> float:
             before = psi_pre.get(resource, 0.0)
             after = psi_post.get(resource, 0.0)
@@ -1046,10 +1084,57 @@ class GuestAgentHandler:
             "steam_pid": steam_proc.pid,
             "mangohud_output": str(output_path),
             "log_found": True,
+            # firstparty_expected distinguishes "this title has no
+            # first-party log" (MangoHud fallback is legitimate) from
+            # "harvest failed" (the run must be treated as failed — mixing
+            # MangoHud-sampled and per-frame percentiles inside one phase
+            # corrupts its statistics).
+            "firstparty_expected": firstparty_glob is not None,
+            "firstparty_log": firstparty_out,
             "psi_cpu_delta": delta("cpu"),
             "psi_memory_delta": delta("memory"),
             "psi_io_delta": delta("io"),
         })
+
+    @staticmethod
+    def _harvest_firstparty_log(
+        glob_rel: str, pre_existing: set[Path], mangohud_output: Path
+    ) -> str:
+        """Copy the benchmark's own per-frame log next to the MangoHud one.
+
+        Waits for a *new* file matching the title's glob to appear and go
+        size-stable (the benchmark may still be mid-flythrough when the
+        MangoHud window closes), then copies it into the fetch_file-allowed
+        output dir as <mangohud-stem>_firstparty.csv. Returns "" when no
+        log shows up — the profiler then falls back to MangoHud metrics.
+        """
+        deadline = time.monotonic() + FIRSTPARTY_LOG_WAIT_SECS
+        last_size = -1
+        while time.monotonic() < deadline:
+            fresh = sorted(
+                set(Path(STEAM_HOME).glob(glob_rel)) - pre_existing,
+                key=lambda p: p.stat().st_mtime,
+            )
+            if fresh:
+                size = fresh[-1].stat().st_size
+                if size > 0 and size == last_size:
+                    dest = mangohud_output.with_name(
+                        mangohud_output.stem + "_firstparty.csv"
+                    )
+                    try:
+                        shutil.copyfile(fresh[-1], dest)
+                    except OSError as exc:
+                        logging.warning("firstparty log copy failed: %s", exc)
+                        return ""
+                    return str(dest)
+                last_size = size
+            time.sleep(2)
+        logging.warning(
+            "no first-party benchmark log matched %s within %ss",
+            glob_rel,
+            FIRSTPARTY_LOG_WAIT_SECS,
+        )
+        return ""
 
 
 # ---------------------------------------------------------------------------

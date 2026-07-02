@@ -19,7 +19,7 @@ from agents.common.tool_registry import ToolRegistry
 def make_profiler_game_tools(registry: ToolRegistry, guest_rpc: Any) -> None:
     """Register game-mode profiler tools into the given registry."""
     # Imported here to avoid a circular import: tools.py imports this module.
-    from agents.profiler.tools import parse_mangohud_csv
+    from agents.profiler.tools import parse_frametime_csv, parse_mangohud_csv
 
     @registry.tool(description=(
         "Run a native GPU benchmark in the guest VM under MangoHud. `name` is "
@@ -112,6 +112,40 @@ def make_profiler_game_tools(registry: ToolRegistry, guest_rpc: Any) -> None:
 
         csv_text = base64.b64decode(contents_b64).decode("utf-8", errors="replace")
         stats = parse_mangohud_csv(csv_text)
+        if data.get("truncated"):
+            stats["truncated"] = True
+        return stats
+
+    @registry.tool(description=(
+        "Fetch a first-party benchmark frame log from the guest VM (one "
+        "frametime-in-ms per line, e.g. Civ 6's Logs/Benchmark-*.csv as "
+        "surfaced in launch_steam_benchmark's firstparty_log field) and "
+        "parse it into frame statistics: frame_count, fps_avg, fps_p1, and "
+        "frametime p50/p95/p99 in milliseconds. Prefer these over MangoHud "
+        "stats when available — they are per-frame and exactly scoped to "
+        "the benchmark scene, with no load-screen contamination."
+    ))
+    def fetch_firstparty_frametimes(log_path: str) -> dict:
+        if guest_rpc is None:
+            return {
+                "status": "dry_run",
+                "message": f"Would fetch {log_path} from guest (no guest RPC)",
+            }
+        try:
+            resp = guest_rpc.call("fetch_file", {"path": log_path})
+        except Exception as exc:
+            return {"status": "error", "error": str(exc)}
+
+        if resp.get("status") != "ok":
+            return {"status": "error", "error": resp.get("message", "fetch_file failed")}
+
+        data = resp.get("data", {})
+        contents_b64 = data.get("contents_b64")
+        if not contents_b64:
+            return {"status": "error", "error": "guest returned no file contents"}
+
+        csv_text = base64.b64decode(contents_b64).decode("utf-8", errors="replace")
+        stats = parse_frametime_csv(csv_text)
         if data.get("truncated"):
             stats["truncated"] = True
         return stats
