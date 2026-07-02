@@ -90,6 +90,18 @@ impl VsockClient {
         self.send_command(GuestCommand::SetupCgroups { groups })
             .await
     }
+
+    /// Apply optimizer-proposed sysctl tunings in the guest (before the
+    /// comparison run). `sysctls` maps dotted keys to values.
+    pub async fn apply_sysctls(
+        &self,
+        sysctls: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<GuestResponse> {
+        self.send_command(GuestCommand::ApplySysctls {
+            config: serde_json::json!({ "sysctls": sysctls }),
+        })
+        .await
+    }
 }
 
 pub fn frame_message(data: &[u8]) -> Vec<u8> {

@@ -106,6 +106,8 @@ pub fn measurement_context(
         }
     } else if config.measurement.mode == "steam" {
         context["steam_app_id"] = serde_json::json!(config.measurement.steam_app_id);
+        context["steam_launch_args"] =
+            serde_json::json!(config.measurement.steam_launch_args);
         context["mangohud_output"] = serde_json::json!(GUEST_MANGOHUD_OUTPUT);
         context["duration_secs"] =
             serde_json::json!(config.measurement.benchmark_duration_secs);
@@ -179,6 +181,48 @@ fn extract_patch_path(value: &serde_json::Value) -> Option<String> {
         .and_then(|v| v.as_str())
         .filter(|s| !s.is_empty())
         .map(|s| s.to_string())
+}
+
+/// Pull the optimizer's proposed sysctl tunings out of its envelope:
+/// `sysctl_changes: [{"key": "kernel.x", "value": "123", ...}, ...]` →
+/// a key→value map. Same top-level-then-parsed fallback as
+/// `extract_patch_path`. Empty map when absent/malformed.
+fn extract_sysctl_changes(value: &serde_json::Value) -> serde_json::Map<String, serde_json::Value> {
+    let mut out = serde_json::Map::new();
+    let direct = value.get("sysctl_changes");
+    let parsed;
+    let list = match direct.and_then(|v| v.as_array()) {
+        Some(l) => Some(l),
+        None => {
+            parsed = parse_agent_response(value);
+            // parsed is a temporary; clone entries out below.
+            match parsed.get("sysctl_changes").and_then(|v| v.as_array()) {
+                Some(l) => {
+                    for item in l {
+                        if let (Some(k), Some(v)) = (
+                            item.get("key").and_then(|k| k.as_str()),
+                            item.get("value"),
+                        ) {
+                            out.insert(k.to_string(), v.clone());
+                        }
+                    }
+                    return out;
+                }
+                None => None,
+            }
+        }
+    };
+    if let Some(l) = list {
+        for item in l {
+            if let (Some(k), Some(v)) = (
+                item.get("key").and_then(|k| k.as_str()),
+                item.get("value"),
+            ) {
+                out.insert(k.to_string(), v.clone());
+            }
+        }
+    }
+    out
 }
 
 /// Extract a `f64` from a JSON object, returning 0.0 when missing or non-numeric.
@@ -649,6 +693,28 @@ impl Orchestrator {
                     attempt = attempt_number,
                     "no patch_path in optimization output, skipping apply"
                 );
+            }
+
+            // Optimizer tunings: apply proposed sysctls in the (possibly
+            // just-rebooted) guest so the comparison actually measures them.
+            // Best-effort — a missing knob (e.g. its patch didn't build)
+            // must not kill the cycle; the guest reports per-key results.
+            let sysctls = extract_sysctl_changes(&optimization);
+            if !sysctls.is_empty() {
+                let summary = sysctls
+                    .iter()
+                    .map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or(&v.to_string())))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                match self.vsock_client.apply_sysctls(sysctls).await {
+                    Ok(resp) => {
+                        tracing::info!(sysctls = %summary, response = ?resp, "sysctl tunings applied");
+                        self.db.insert_patch(cycle_id, "tuning", &summary)?;
+                    }
+                    Err(e) => {
+                        tracing::warn!(sysctls = %summary, error = %e, "sysctl apply failed; comparison runs untuned");
+                    }
+                }
             }
 
             // ComparisonMeasurement

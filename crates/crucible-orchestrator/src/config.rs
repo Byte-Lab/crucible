@@ -77,6 +77,11 @@ pub struct MeasurementConfig {
     /// Default 570 = Dota 2 (free license, native Linux, Vulkan).
     #[serde(default = "default_steam_app_id")]
     pub steam_app_id: u32,
+    /// Launch arguments appended to `-applaunch <steam_app_id>` — the
+    /// per-title benchmark invocation (e.g. Civ 6's
+    /// `["-benchmark", "graphicsbenchmark"]`). Empty = no extra args.
+    #[serde(default)]
+    pub steam_launch_args: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -230,6 +235,7 @@ impl Default for MeasurementConfig {
             benchmark_duration_secs: default_benchmark_duration(),
             game_benchmark: default_game_benchmark(),
             steam_app_id: default_steam_app_id(),
+            steam_launch_args: Vec::new(),
         }
     }
 }

@@ -43,10 +43,10 @@ Respond with JSON: {"fps_avg": <float>, "fps_p1": <float>, "frame_time_p99_ms": 
             mangohud_output = context.get(
                 "mangohud_output", "/tmp/crucible_mangohud.csv"
             )
-            # v1 measures uncapped main-menu rendering (-novid skips the
-            # intro video); demo-driven timedemo passes land once a demo
-            # file ships in the rootfs.
-            args = ["-novid"]
+            # Per-title benchmark invocation from [measurement]
+            # steam_launch_args (e.g. Civ 6's built-in graphics benchmark).
+            # Empty args launch the title bare.
+            args = list(context.get("steam_launch_args") or [])
             msg = (
                 f"Collect {phase} measurements from the Steam title.\n"
                 f"1. Call launch_steam_benchmark(app_id={steam_app_id}, "

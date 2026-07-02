@@ -24,8 +24,12 @@ benchmark_args = ["--cpu", "2"]
 benchmark_duration_secs = 30
 # Native benchmark used when mode = "game": "vkmark" or "glmark2".
 game_benchmark = "vkmark"
-# Steam app measured when mode = "steam". 570 = Dota 2.
-steam_app_id = 570
+# Steam app measured when mode = "steam". 289070 = Civilization VI —
+# native Linux (OpenGL), with a deterministic built-in graphics benchmark.
+# (570 = Dota 2 launches fine but its headless menu presents no frames.)
+steam_app_id = 289070
+# Per-title benchmark launch args, appended to -applaunch.
+steam_launch_args = ["-benchmark", "graphicsbenchmark"]
 runs_per_phase = 5
 warmup_runs = 1
 significance_threshold = 0.05

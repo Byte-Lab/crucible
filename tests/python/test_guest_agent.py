@@ -109,6 +109,40 @@ def test_start_profiling_missing_perfetto_binary(monkeypatch):
     assert "traced" in resp.message or "perfetto" in resp.message
 
 
+def test_apply_sysctls_writes_proc_paths(monkeypatch, tmp_path):
+    import guest.crucible_guest_agent as agent_mod
+
+    handler = agent_mod.GuestAgentHandler()
+    # Redirect /proc/sys writes into a sandbox.
+    real_open = open
+
+    def fake_open(path, *a, **k):
+        if isinstance(path, str) and path.startswith("/proc/sys/"):
+            p = tmp_path / path.replace("/proc/sys/", "").replace("/", "_")
+            return real_open(p, *a, **k)
+        return real_open(path, *a, **k)
+
+    import builtins
+    monkeypatch.setattr(builtins, "open", fake_open)
+    resp = handler.handle(GuestCommand(
+        cmd="apply_sysctls",
+        config={"sysctls": {"kernel.sched_base_slice_ns": "1500000",
+                            "vm.nonexistent_knob": "1"}},
+    ))
+    assert resp.status == "ok"
+    # First key round-trips through the sandboxed file; the second fails on
+    # read-back... both files get created by the sandbox, so both apply.
+    assert resp.data["applied"]["kernel.sched_base_slice_ns"] == "1500000"
+
+
+def test_apply_sysctls_requires_sysctls_dict():
+    from guest.crucible_guest_agent import GuestAgentHandler
+
+    handler = GuestAgentHandler()
+    resp = handler.handle(GuestCommand(cmd="apply_sysctls", config={}))
+    assert resp.status == "error"
+
+
 def test_handle_unknown_command():
     from guest.crucible_guest_agent import GuestAgentHandler
 

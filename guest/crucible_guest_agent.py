@@ -213,6 +213,30 @@ class GuestAgentHandler:
         uptime = time.monotonic() - _BOOT_TIME
         return GuestResponse.ok({"uptime": round(uptime, 2), "pid": os.getpid()})
 
+    def _handle_apply_sysctls(self, cmd: GuestCommand) -> GuestResponse:
+        """Apply optimizer-proposed sysctl tunings before the comparison run.
+
+        config = {"sysctls": {"kernel.sched_base_slice_ns": "1500000", ...}}.
+        Keys are dotted sysctl names; values written as strings. Reports
+        applied and failed maps — a failed key (e.g. the knob's patch didn't
+        build) must not crash the cycle.
+        """
+        sysctls = (cmd.config or {}).get("sysctls") or {}
+        if not isinstance(sysctls, dict) or not sysctls:
+            return GuestResponse.error("config.sysctls must be a non-empty dict")
+        applied: dict[str, str] = {}
+        failed: dict[str, str] = {}
+        for key, value in sysctls.items():
+            path = "/proc/sys/" + str(key).replace(".", "/")
+            try:
+                with open(path, "w", encoding="ascii") as f:
+                    f.write(str(value))
+                with open(path, "r", encoding="ascii") as f:
+                    applied[key] = f.read().strip()
+            except OSError as exc:
+                failed[key] = str(exc)
+        return GuestResponse.ok({"applied": applied, "failed": failed})
+
     def _handle_setup_cgroups(self, cmd: GuestCommand) -> GuestResponse:
         groups = cmd.groups or ["game", "compositor", "wine", "mesa", "system"]
         created: list[str] = []

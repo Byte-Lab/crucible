@@ -126,6 +126,12 @@ pub enum GuestCommand {
         mangohud_output: String,
         duration_secs: u32,
     },
+    /// Apply optimizer-proposed sysctl tunings in the guest before the
+    /// comparison run. `config` = {"sysctls": {"kernel.x": "value", ...}};
+    /// the guest reports applied/failed per key without failing the cycle.
+    ApplySysctls {
+        config: serde_json::Value,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -294,6 +300,26 @@ mod tests {
         } else {
             panic!("wrong variant");
         }
+    }
+
+    #[test]
+    fn guest_command_apply_sysctls_roundtrip() {
+        // Wire contract with guest/crucible_guest_agent.py
+        // `_handle_apply_sysctls`: {"cmd": "apply_sysctls", "config":
+        // {"sysctls": {...}}} — dotted keys, string values.
+        let cmd = GuestCommand::ApplySysctls {
+            config: serde_json::json!({
+                "sysctls": {"kernel.sched_base_slice_ns": "1500000"}
+            }),
+        };
+        let json = serde_json::to_value(&cmd).unwrap();
+        assert_eq!(json["cmd"], "apply_sysctls");
+        assert_eq!(
+            json["config"]["sysctls"]["kernel.sched_base_slice_ns"],
+            "1500000"
+        );
+        let parsed: GuestCommand = serde_json::from_value(json).unwrap();
+        assert!(matches!(parsed, GuestCommand::ApplySysctls { .. }));
     }
 
     #[test]
