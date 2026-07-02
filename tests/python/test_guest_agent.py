@@ -143,6 +143,33 @@ def test_apply_sysctls_requires_sysctls_dict():
     assert resp.status == "error"
 
 
+def test_apply_sysctls_rejects_traversal_keys():
+    from guest.crucible_guest_agent import GuestAgentHandler
+
+    handler = GuestAgentHandler()
+    # Keys come from model output over vsock: slashes and dot-dot must
+    # never reach the filesystem as paths outside /proc/sys.
+    resp = handler.handle(GuestCommand(
+        cmd="apply_sysctls",
+        config={"sysctls": {
+            "a/../../etc/crucible_pwned": "1",
+            "kernel..shadow": "1",
+            "../escape": "1",
+            "kernel.sane_key": "1",  # valid shape; may fail on write, not on the guard
+        }},
+    ))
+    assert resp.status == "ok"
+    assert "a/../../etc/crucible_pwned" in resp.data["failed"]
+    assert resp.data["failed"]["a/../../etc/crucible_pwned"] == "invalid sysctl key"
+    assert "kernel..shadow" in resp.data["failed"]
+    assert "../escape" in resp.data["failed"]
+    assert "kernel.sane_key" not in [
+        k for k, v in resp.data["failed"].items() if v == "invalid sysctl key"
+    ]
+    import os
+    assert not os.path.exists("/etc/crucible_pwned")
+
+
 def test_handle_unknown_command():
     from guest.crucible_guest_agent import GuestAgentHandler
 

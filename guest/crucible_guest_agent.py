@@ -140,6 +140,9 @@ NETWORK_DHCP_TIMEOUT_SECS = 30
 # traced needs a beat to create its socket before the perfetto client
 # connects; traced_probes registers the ftrace data source in that window.
 PERFETTO_DAEMON_WARMUP_SECS = 2
+# Dotted sysctl names only — the apply_sysctls guard against traversal
+# out of /proc/sys (keys arrive from the optimizer's model output).
+_SYSCTL_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$")
 
 
 def _has_default_route(route_path: str = "/proc/net/route") -> bool:
@@ -227,7 +230,17 @@ class GuestAgentHandler:
         applied: dict[str, str] = {}
         failed: dict[str, str] = {}
         for key, value in sysctls.items():
-            path = "/proc/sys/" + str(key).replace(".", "/")
+            # The key comes from the optimizer's model output over vsock —
+            # same trust level as fetch_file paths. Without this guard a
+            # key like "a/../../etc/x" walks out of /proc/sys into an
+            # arbitrary file write.
+            if not isinstance(key, str) or not _SYSCTL_KEY_RE.match(key):
+                failed[str(key)] = "invalid sysctl key"
+                continue
+            path = "/proc/sys/" + key.replace(".", "/")
+            if not os.path.realpath(path).startswith("/proc/sys/"):
+                failed[key] = "path escapes /proc/sys"
+                continue
             try:
                 with open(path, "w", encoding="ascii") as f:
                     f.write(str(value))
