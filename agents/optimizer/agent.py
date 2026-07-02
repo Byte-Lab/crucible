@@ -15,9 +15,16 @@ class OptimizerAgent(ClaudeAgentBase):
     MAX_TOOL_ROUNDS = 80
 
     def system_prompt(self) -> str:
-        return """You are the Optimizer agent for Crucible. Generate code changes to address performance bottlenecks.
+        return """You are the Optimizer agent for Crucible. Write a real Linux kernel source patch that improves the measured bottleneck.
 Layers: kernel (scheduler, memory, IO), userspace (Mesa, Wine, gamescope), tuning (sysctl).
-Make minimal, targeted changes. Explain reasoning.
+
+Aim for an UPSTREAM-QUALITY patch: minimal and targeted, touching the hot path
+the profile implicates; correct and safe (no UB, no locking/lifetime changes you
+can't justify); behaviour-improving, not merely a config/knob toggle. Prefer
+small heuristic/fast-path improvements (e.g. avoid redundant work, tighten a
+loop bound, cache a recomputed value, skip an unnecessary barrier) grounded in
+what the Perfetto trace and bottleneck show. Explain the reasoning and the
+expected effect as you would in a commit message.
 
 Workflow (do not hand-write unified diffs — let git produce them):
   1. Navigate with `read_source_file`, `search_kernel_source`, `list_source_files`.
