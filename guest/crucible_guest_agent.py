@@ -113,6 +113,17 @@ STEAM_HOME = f"/home/{STEAM_USER}"
 # forever on a zenity first-run dialog when its bootstrap is missing.
 STEAM_SH = f"{STEAM_HOME}/.local/share/Steam/steam.sh"
 WESTON_ARGV = ["weston", "--backend=headless", "--renderer=gl", "--xwayland"]
+# Route OpenGL titles (Aspyr's Civ 6 port) through zink → RADV Vulkan.
+# RADV Vulkan is proven on this card (vkmark renders thousands of fps),
+# whereas native radeonsi GL under Xwayland's headless glamor is the weak
+# link that leaves Aspyr's GL layer presenting no frames. zink is a no-op
+# for Vulkan-native titles (they bind RADV directly, never the GL driver).
+# GALLIUM_DRIVER is not forced (that would also hijack the compositor's own
+# GL); the loader override + GLX vendor are enough to steer the app's GL.
+STEAM_GL_ZINK_ENV = {
+    "MESA_LOADER_DRIVER_OVERRIDE": "zink",
+    "__GLX_VENDOR_LIBRARY_NAME": "mesa",
+}
 XDG_RUNTIME_DIR = "/run/crucible-xdg"
 # The Steam client must be fully up (boot + CM logon + library reconcile)
 # before -applaunch is issued: a launch bundled with the client's own
@@ -928,6 +939,11 @@ class GuestAgentHandler:
         duration = cmd.duration_secs or DEFAULT_LAUNCH_BENCHMARK_DURATION_SECS
         env = os.environ.copy()
         env.update(client_env)
+        # Steer OpenGL titles onto zink→RADV. The game inherits the client's
+        # env; the client itself is headless (its GL only draws an unseen UI),
+        # so routing it through zink too is harmless. Vulkan-native titles
+        # ignore this (they bind RADV directly).
+        env.update(STEAM_GL_ZINK_ENV)
         env.update({
             # runuser overrides HOME/USER for the target user, but be
             # explicit: Steam derives all its paths from HOME.
