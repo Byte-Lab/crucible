@@ -525,8 +525,12 @@ class GuestAgentHandler:
             return GuestResponse.error(f"stress-ng exceeded wall clock timeout: {exc}")
         psi_post = _read_system_psi_avg10()
 
-        metrics = _parse_stress_ng_metrics(proc.stderr or "")
-        stderr_tail = "\n".join((proc.stderr or "").splitlines()[-20:])
+        # stress-ng writes --metrics-brief to stderr in some versions
+        # (0.20+) and stdout in others (0.19 in the trixie rootfs). Parse
+        # both so the ops/sec metric survives a version bump.
+        combined = f"{proc.stdout or ''}\n{proc.stderr or ''}"
+        metrics = _parse_stress_ng_metrics(combined)
+        stderr_tail = "\n".join(combined.splitlines()[-20:])
 
         def delta(resource: str) -> float:
             before = psi_pre.get(resource, 0.0)

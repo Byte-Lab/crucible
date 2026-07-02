@@ -308,6 +308,31 @@ def test_handle_run_benchmark_success(monkeypatch):
     assert "stress-ng" in resp.data["raw_stderr_tail"]
 
 
+def test_handle_run_benchmark_parses_metrics_from_stdout(monkeypatch):
+    # stress-ng 0.19 (trixie rootfs) writes --metrics-brief to STDOUT, not
+    # stderr; the handler must parse both or ops_per_sec comes back 0.
+    from guest import crucible_guest_agent as gga
+    from guest.crucible_guest_agent import GuestAgentHandler
+
+    monkeypatch.setattr(
+        gga, "_read_system_psi_avg10",
+        lambda: {"cpu": 0.0, "memory": 0.0, "io": 0.0},
+    )
+
+    class FakeProc:
+        returncode = 0
+        stdout = STRESS_NG_CANNED_STDERR  # metrics on stdout this time
+        stderr = ""
+
+    monkeypatch.setattr(gga.subprocess, "run", lambda *a, **k: FakeProc())
+    resp = GuestAgentHandler().handle(GuestCommand(
+        cmd="run_benchmark", name="stress-ng", args=["--vm", "1"], duration_secs=5,
+    ))
+    assert resp.status == "ok"
+    assert resp.data["ops_per_sec"] > 0
+    assert resp.data["bogo_ops"] > 0
+
+
 def test_handle_run_benchmark_clamps_negative_psi_delta(monkeypatch):
     from guest import crucible_guest_agent as gga
     from guest.crucible_guest_agent import GuestAgentHandler
