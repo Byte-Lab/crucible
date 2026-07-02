@@ -65,7 +65,17 @@ Respond with JSON only (no prose, no fences):
                 "kernel.sched_rt_runtime_us). Do NOT invent debugfs-only knobs "
                 "(e.g. sched/base_slice_ns is NOT a sysctl on this kernel). Pick "
                 "changes whose direction plausibly helps the specific bottleneck "
-                "above, and that differ from previous attempts."
+                "above, and that differ from previous attempts. Prefer knobs with "
+                "LARGE, reliable effects on a CPU-contended headless render "
+                "workload — the strongest are: kernel.numa_balancing=0 (kills "
+                "periodic NUMA scan/migration overhead), kernel.timer_migration=0 "
+                "(keeps timers CPU-local), kernel.sched_autogroup_enabled=0 "
+                "(removes autogroup fairness overhead for a foreground workload), "
+                "vm.compaction_proactiveness=0 and vm.numa_stat=0 (cut background "
+                "kernel work), kernel.sched_cfs_bandwidth_slice_us raised to "
+                "10000-20000 (fewer bandwidth reschedules). Change ONE or TWO "
+                "high-impact knobs per attempt so the effect is attributable, and "
+                "pick ones the trace's bottleneck actually implicates."
             )
         return msg
 
