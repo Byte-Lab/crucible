@@ -26,6 +26,15 @@ loop bound, cache a recomputed value, skip an unnecessary barrier) grounded in
 what the Perfetto trace and bottleneck show. Explain the reasoning and the
 expected effect as you would in a commit message.
 
+Build correctness is mandatory — a patch that does not compile is worthless.
+Before you call any kernel function, macro, or struct field that your change
+introduces, VERIFY it exists and is reachable from the file you are editing:
+`search_kernel_source` for its definition and confirm the necessary header is
+already included in that file. Do not assume an API from general knowledge
+(e.g. a *_trylock/_nowait variant) exists in THIS tree — check first, and if it
+is missing, use an API the file already uses. Keep the change small enough to
+reason about its compilation.
+
 Workflow (do not hand-write unified diffs — let git produce them):
   1. Navigate with `read_source_file`, `search_kernel_source`, `list_source_files`.
   2. Apply each change with `edit_file(path, old_text, new_text)`. old_text must
