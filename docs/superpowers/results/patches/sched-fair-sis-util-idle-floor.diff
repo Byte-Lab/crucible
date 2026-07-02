@@ -1,0 +1,30 @@
+diff --git a/kernel/sched/fair.c b/kernel/sched/fair.c
+index 3ebec186f982..2e19b73554c6 100644
+--- a/kernel/sched/fair.c
++++ b/kernel/sched/fair.c
+@@ -7965,9 +7965,23 @@ static int select_idle_cpu(struct task_struct *p, struct sched_domain *sd, bool
+ 		 * reference to one the associated "sd" here.
+ 		 */
+ 		nr = READ_ONCE(sd->shared->nr_idle_scan) + 1;
+-		/* overloaded LLC is unlikely to have idle cpu/core */
++		/*
++		 * nr_idle_scan is a slowly-decaying LLC-wide utilization
++		 * average that is only refreshed on periodic (non-newidle)
++		 * load balance passes, so it can lag reality by tens of
++		 * milliseconds. On a bursty workload where a handful of
++		 * CPUs are kept transiently busy by IRQs/softirqs/kworkers
++		 * while the remaining CPUs in the LLC are actually idle,
++		 * this stale average can read as "overloaded" and make
++		 * every wakeup skip the scan entirely, stacking tasks onto
++		 * a busy CPU instead of a genuinely idle sibling. Rather
++		 * than giving up outright, still probe a small, bounded
++		 * number of CPUs so such idle siblings remain reachable;
++		 * the cost is capped and only paid when the fast per-CPU
++		 * checks in the caller already failed to find an idle CPU.
++		 */
+ 		if (nr == 1)
+-			return -1;
++			nr = min_t(int, 4, sd->span_weight);
+ 	}
+ 
+ 	if (!cpumask_and(cpus, sched_domain_span(sd), p->cpus_ptr))
