@@ -45,6 +45,16 @@ Respond with JSON: {"bottleneck": "<subsystem>", "severity": "high|medium|low", 
                 f"{json.dumps(previous_attempts)}.\n"
                 f"Consider alternate bottlenecks; do not re-recommend the same subsystem.\n"
             )
+        explored = context.get("explored_areas") or []
+        if explored:
+            msg += (
+                f"Earlier cycles already produced patches for these areas: "
+                f"{json.dumps(explored)}. Identify a DIFFERENT bottleneck / kernel "
+                "subsystem this time (e.g. if hugepage collapse and anon-fault "
+                "allocation are taken, look at reclaim, compaction control, "
+                "slab, RCU, softirq, or the scheduler paths the trace shows). "
+                "Do not re-recommend an already-explored area.\n"
+            )
         msg += "Use tools to identify the primary bottleneck."
         return msg
 

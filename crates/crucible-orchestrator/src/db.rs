@@ -248,6 +248,18 @@ impl Database {
             .context("failed to collect patches")
     }
 
+    /// All patch diff paths across every cycle, oldest first. Used to give
+    /// the analyzer/optimizer a memory of already-explored areas so a fresh
+    /// cycle picks a different bottleneck instead of re-deriving the same one.
+    pub fn list_all_patch_diffs(&self) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT diff_path FROM patches WHERE diff_path != '' ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .context("failed to collect patch diffs")
+    }
+
     pub fn mark_patch_reverted(&self, id: i64) -> Result<()> {
         self.conn.execute(
             "UPDATE patches SET reverted_at = datetime('now') WHERE id = ?1",

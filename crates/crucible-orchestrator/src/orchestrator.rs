@@ -664,6 +664,27 @@ impl Orchestrator {
             .max(1);
         let mut iteration: u32 = 0;
         let mut previous_attempts: Vec<serde_json::Value> = Vec::new();
+        // Cross-cycle memory: patches from earlier cycles in this run. Each
+        // cycle reverts its patch and starts from the base kernel, so without
+        // this the analyzer keeps re-deriving the same bottleneck and the
+        // optimizer produces near-duplicate patches. Seed both agents with the
+        // already-explored diff names so a fresh cycle targets a different
+        // subsystem/function.
+        let explored_areas: Vec<serde_json::Value> = self
+            .db
+            .list_all_patch_diffs()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| {
+                serde_json::Value::String(
+                    std::path::Path::new(&p)
+                        .file_stem()
+                        .and_then(|s| s.to_str())
+                        .unwrap_or(&p)
+                        .to_string(),
+                )
+            })
+            .collect();
         let (overall, applied_patch): (Verdict, Option<String>) = loop {
             let attempt_number = iteration + 1;
 
@@ -717,6 +738,10 @@ impl Orchestrator {
             if !previous_attempts.is_empty() {
                 analyze_context["previous_attempts"] =
                     serde_json::Value::Array(previous_attempts.clone());
+            }
+            if !explored_areas.is_empty() {
+                analyze_context["explored_areas"] =
+                    serde_json::Value::Array(explored_areas.clone());
             }
             let analysis_result = self
                 .run_agent(AgentName::Analyzer, analyze_context)
@@ -773,6 +798,10 @@ impl Orchestrator {
             if !previous_attempts.is_empty() {
                 optimize_context["previous_attempts"] =
                     serde_json::Value::Array(previous_attempts.clone());
+            }
+            if !explored_areas.is_empty() {
+                optimize_context["explored_areas"] =
+                    serde_json::Value::Array(explored_areas.clone());
             }
             let optimization = self
                 .run_agent(AgentName::Optimizer, optimize_context)

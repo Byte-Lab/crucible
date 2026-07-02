@@ -58,6 +58,14 @@ Respond with JSON only (no prose, no fences):
         workload_args = context.get("workload_args")
         if workload_args:
             msg += f"Measured workload: {context.get('workload_mode','')} {workload_args}\n"
+        explored = context.get("explored_areas") or []
+        if explored:
+            msg += (
+                f"Earlier cycles already patched these areas: {json.dumps(explored)}. "
+                "Target a DIFFERENT kernel file/function this time so the run "
+                "yields a diverse set of patches, not variations of one change. "
+                "Do not re-edit an already-explored area.\n"
+            )
         if context.get("tuning_only"):
             msg += (
                 "\nTUNING-ONLY MODE. Do NOT edit kernel source and do NOT call "
