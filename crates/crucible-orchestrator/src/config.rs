@@ -50,13 +50,22 @@ pub struct VmConfig {
     pub boot_timeout_secs: u64,
     #[serde(default = "default_vsock_cid")]
     pub vsock_cid: u32,
-    /// Host CPUs to pin vCPU threads to, e.g. "8-15" or "8,9,10,11".
+    /// Host CPUs to pin vCPU threads to, e.g. "8-15" or "8,24,9,25,...".
     /// vCPU N is pinned 1:1 to the Nth listed CPU after each boot.
     /// Empty = no pinning. Pair with a host-side cpuset shield
     /// (systemctl set-property --runtime system.slice user.slice
     /// AllowedCPUs=<the remaining CPUs>) for low-noise measurements.
     #[serde(default)]
     pub vcpu_pin_cpus: String,
+    /// Guest SMP topology appended to `cpus`, e.g. "sockets=1,cores=8,threads=2"
+    /// (must multiply out to `cpus`). Emitted as a `-smp` override in
+    /// qemu-opts so the guest kernel sees the same core/SMT structure the
+    /// pin list maps onto — QEMU enumerates vCPUs thread-innermost
+    /// (vCPU N = core N/threads, thread N%threads), so with threads=2 the
+    /// pin list must interleave host SMT twins ("8,24,9,25,..."). Empty =
+    /// vng's flat default (all vCPUs look like independent cores).
+    #[serde(default)]
+    pub smp_topology: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]

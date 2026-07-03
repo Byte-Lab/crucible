@@ -105,6 +105,13 @@ impl VmManager {
         // route out (the guest agent DHCPs the interface itself). Harmless
         // for the synthetic loop — the NIC just sits idle.
         qemu_opts.push_str("-netdev user,id=net0 -device virtio-net-pci,netdev=net0");
+        let topology = self.config.smp_topology.trim();
+        if !topology.is_empty() {
+            // Appended after vng's own `-smp <cpus>`; QEMU takes the last
+            // -smp, so this override gives the guest the real core/thread
+            // structure (vng exposes no topology flags itself).
+            qemu_opts.push_str(&format!(" -smp {},{}", self.config.cpus, topology));
+        }
         let guest_cmd =
             "cd /opt/crucible && PYTHONPATH=/opt/crucible \
              exec python3 -m guest.crucible_guest_agent"
@@ -567,6 +574,37 @@ impl VmManager {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn boot_command_appends_smp_topology_override() {
+        let toml_str = r#"
+            kernel_src = "/tmp/k"
+            guest_rootfs = "/tmp/r"
+            vfio_device = "none"
+            cpus = 16
+            smp_topology = "sockets=1,cores=8,threads=2"
+        "#;
+        let config: crate::config::VmConfig = toml::from_str(toml_str).unwrap();
+        let vm = VmManager::new(config);
+        let args = vm.build_boot_command("bzImage", &[], None);
+        let qemu_opts = args.iter().find(|a| a.starts_with("--qemu-opts=")).unwrap();
+        assert!(
+            qemu_opts.contains("-smp 16,sockets=1,cores=8,threads=2"),
+            "{qemu_opts}"
+        );
+
+        // Empty topology: no -smp override in qemu-opts.
+        let toml_str = r#"
+            kernel_src = "/tmp/k"
+            guest_rootfs = "/tmp/r"
+            vfio_device = "none"
+        "#;
+        let config: crate::config::VmConfig = toml::from_str(toml_str).unwrap();
+        let vm = VmManager::new(config);
+        let args = vm.build_boot_command("bzImage", &[], None);
+        let qemu_opts = args.iter().find(|a| a.starts_with("--qemu-opts=")).unwrap();
+        assert!(!qemu_opts.contains("-smp"), "{qemu_opts}");
+    }
+
     #[test]
     fn parse_cpu_list_ranges_and_singles() {
         assert_eq!(super::parse_cpu_list("8-11").unwrap(), vec![8, 9, 10, 11]);
