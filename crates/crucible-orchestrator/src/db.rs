@@ -261,6 +261,48 @@ impl Database {
             .context("failed to collect patch diffs")
     }
 
+    /// Like [`list_all_patch_diffs`] but each path is paired with a short
+    /// measured-outcome summary ("accepted: fps_avg +4.2%", "neutral: …",
+    /// "regressed: …", or "unevaluated"). Threaded into the analyzer /
+    /// optimizer context so later cycles learn which families of change
+    /// actually moved the needle instead of only which names were tried.
+    pub fn list_patch_outcomes(&self) -> Result<Vec<(String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT p.diff_path,
+                    (SELECT e.delta_pct FROM evaluations e
+                      WHERE e.cycle_id = p.cycle_id AND e.metric = 'fps_avg'),
+                    EXISTS(SELECT 1 FROM evaluations e
+                            WHERE e.cycle_id = p.cycle_id AND e.verdict = 'accept'),
+                    EXISTS(SELECT 1 FROM evaluations e
+                            WHERE e.cycle_id = p.cycle_id AND e.verdict = 'regressed'),
+                    EXISTS(SELECT 1 FROM evaluations e
+                            WHERE e.cycle_id = p.cycle_id)
+             FROM patches p WHERE p.diff_path != '' ORDER BY p.id ASC",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let path: String = row.get(0)?;
+            let fps_delta: Option<f64> = row.get(1)?;
+            let any_accept: bool = row.get(2)?;
+            let any_regressed: bool = row.get(3)?;
+            let evaluated: bool = row.get(4)?;
+            let delta = fps_delta
+                .map(|d| format!("fps_avg {:+.1}%", d))
+                .unwrap_or_else(|| "no fps delta".to_string());
+            let outcome = if !evaluated {
+                "unevaluated".to_string()
+            } else if any_accept {
+                format!("accepted: {delta}")
+            } else if any_regressed {
+                format!("regressed: {delta}")
+            } else {
+                format!("neutral: {delta}")
+            };
+            Ok((path, outcome))
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .context("failed to collect patch outcomes")
+    }
+
     pub fn mark_patch_reverted(&self, id: i64) -> Result<()> {
         self.conn.execute(
             "UPDATE patches SET reverted_at = datetime('now') WHERE id = ?1",
@@ -410,5 +452,36 @@ mod tests {
         assert_eq!(evals.len(), 1);
         assert_eq!(evals[0].metric, "frame_time_p99");
         assert_eq!(evals[0].verdict, "accept");
+    }
+
+    #[test]
+    fn list_patch_outcomes_annotates_measured_verdicts() {
+        let db = test_db();
+
+        // Accepted cycle: fps_avg accept + a neutral sibling metric.
+        let won = db.create_cycle("g", 1).unwrap();
+        db.insert_patch(won, "kernel", "/tmp/patches/winner.diff")
+            .unwrap();
+        db.insert_evaluation(won, "fps_avg", 26.6, 27.8, 4.2, "accept")
+            .unwrap();
+        db.insert_evaluation(won, "fps_p1", 14.3, 15.4, 7.4, "neutral")
+            .unwrap();
+
+        // Neutral cycle.
+        let meh = db.create_cycle("g", 1).unwrap();
+        db.insert_patch(meh, "kernel", "/tmp/patches/meh.diff").unwrap();
+        db.insert_evaluation(meh, "fps_avg", 27.0, 26.7, -1.1, "neutral")
+            .unwrap();
+
+        // Patch whose cycle never reached Evaluate (e.g. died mid-cycle).
+        let dead = db.create_cycle("g", 1).unwrap();
+        db.insert_patch(dead, "kernel", "/tmp/patches/dead.diff").unwrap();
+
+        let outcomes = db.list_patch_outcomes().unwrap();
+        assert_eq!(outcomes.len(), 3);
+        assert_eq!(outcomes[0].0, "/tmp/patches/winner.diff");
+        assert_eq!(outcomes[0].1, "accepted: fps_avg +4.2%");
+        assert_eq!(outcomes[1].1, "neutral: fps_avg -1.1%");
+        assert_eq!(outcomes[2].1, "unevaluated");
     }
 }

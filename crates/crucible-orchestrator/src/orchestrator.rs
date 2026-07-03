@@ -694,17 +694,19 @@ impl Orchestrator {
         // subsystem/function.
         let explored_areas: Vec<serde_json::Value> = self
             .db
-            .list_all_patch_diffs()
+            .list_patch_outcomes()
             .unwrap_or_default()
             .into_iter()
-            .map(|p| {
-                serde_json::Value::String(
-                    std::path::Path::new(&p)
-                        .file_stem()
-                        .and_then(|s| s.to_str())
-                        .unwrap_or(&p)
-                        .to_string(),
-                )
+            .map(|(p, outcome)| {
+                let stem = std::path::Path::new(&p)
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .unwrap_or(&p)
+                    .to_string();
+                // Outcome annotation lets the agents treat an accepted
+                // family as fertile ground (different mechanism, same
+                // subsystem) instead of just a name to avoid.
+                serde_json::Value::String(format!("{stem} [{outcome}]"))
             })
             .collect();
         let (overall, applied_patch): (Verdict, Option<String>) = loop {

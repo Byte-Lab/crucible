@@ -70,10 +70,13 @@ Respond with JSON only (no prose, no fences):
         explored = context.get("explored_areas") or []
         if explored:
             msg += (
-                f"Earlier cycles already patched these areas: {json.dumps(explored)}. "
-                "Target a DIFFERENT kernel file/function this time so the run "
-                "yields a diverse set of patches, not variations of one change. "
-                "Do not re-edit an already-explored area.\n"
+                f"Earlier cycles already patched these areas, annotated with "
+                f"their MEASURED outcome: {json.dumps(explored)}. Never "
+                "re-emit the same change or re-edit the same function. "
+                "Neutral/regressed entries are dead ends — avoid their "
+                "files. Accepted entries measurably improved the benchmark: "
+                "a DIFFERENT function/mechanism in that same subsystem "
+                "family is a promising target.\n"
             )
         if context.get("tuning_only"):
             msg += (
