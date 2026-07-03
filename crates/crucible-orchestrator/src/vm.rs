@@ -112,6 +112,13 @@ impl VmManager {
             // structure (vng exposes no topology flags itself).
             qemu_opts.push_str(&format!(" -smp {},{}", self.config.cpus, topology));
         }
+        if !self.config.vcpu_pin_cpus.trim().is_empty() {
+            // QEMU names its vCPU threads ("CPU N/KVM") ONLY under
+            // debug-threads=on — without it every thread reads
+            // "qemu-system-x86" and pin_vcpus finds nothing. Overrides
+            // vng's own -name (last one wins).
+            qemu_opts.push_str(" -name crucible-vm,debug-threads=on");
+        }
         let guest_cmd =
             "cd /opt/crucible && PYTHONPATH=/opt/crucible \
              exec python3 -m guest.crucible_guest_agent"
@@ -582,6 +589,7 @@ mod tests {
             vfio_device = "none"
             cpus = 16
             smp_topology = "sockets=1,cores=8,threads=2"
+            vcpu_pin_cpus = "8,24"
         "#;
         let config: crate::config::VmConfig = toml::from_str(toml_str).unwrap();
         let vm = VmManager::new(config);
@@ -591,6 +599,13 @@ mod tests {
             qemu_opts.contains("-smp 16,sockets=1,cores=8,threads=2"),
             "{qemu_opts}"
         );
+        // Pinning requires named vCPU threads (QEMU only names them
+        // under debug-threads=on).
+        assert!(
+            qemu_opts.contains("-name crucible-vm,debug-threads=on"),
+            "{qemu_opts}"
+        );
+
 
         // Empty topology: no -smp override in qemu-opts.
         let toml_str = r#"
