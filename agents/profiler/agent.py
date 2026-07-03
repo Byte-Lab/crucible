@@ -87,10 +87,10 @@ Respond with JSON: {"fps_avg": <float>, "fps_p1": <float>, "frame_time_p99_ms": 
                 # needed — a Steam relaunch costs minutes.
                 lines.append(
                     f"{step}. Call start_profiling(duration_secs=600, "
-                    f"output={perfetto_output!r}, buffer_size_kb=6144). The "
-                    "small ring buffer keeps the trace under the vsock "
-                    "fetch cap while covering the benchmark scene at the "
-                    "end of the run."
+                    f"output={perfetto_output!r}). The default ring buffer "
+                    "covers the whole launch (load + benchmark scene); "
+                    "fetch_perfetto_trace pages the file over vsock in "
+                    "chunks, so trace size is not a concern."
                 )
                 step += 1
             lines.append(

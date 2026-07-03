@@ -521,14 +521,27 @@ class GuestAgentHandler:
         p = Path(resolved)
         if not p.exists():
             return GuestResponse.error(f"file not found: {file_path}")
+        # Optional chunked read: each response is capped at
+        # FETCH_FILE_MAX_BYTES (a vsock message is one length-prefixed JSON
+        # blob), but the host can page through a larger file — e.g. a
+        # multi-minute Perfetto trace — by re-calling with config.offset.
+        # truncated=true means "this chunk did not reach EOF".
+        try:
+            offset = int((cmd.config or {}).get("offset", 0))
+        except (TypeError, ValueError):
+            return GuestResponse.error("config.offset must be an integer")
+        if offset < 0:
+            return GuestResponse.error("config.offset must be >= 0")
         try:
             size = p.stat().st_size
             with p.open("rb") as fh:
+                fh.seek(offset)
                 contents = fh.read(FETCH_FILE_MAX_BYTES)
             return GuestResponse.ok({
                 "path": str(p),
                 "size": size,
-                "truncated": size > FETCH_FILE_MAX_BYTES,
+                "offset": offset,
+                "truncated": offset + len(contents) < size,
                 "contents_b64": base64.b64encode(contents).decode("ascii"),
             })
         except OSError as exc:

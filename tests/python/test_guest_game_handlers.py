@@ -794,3 +794,35 @@ def test_start_profiling_buffer_size_override(handler, monkeypatch):
     assert "duration_ms: 60000" in text
     assert "size_kb: 6144" in text
     assert "size_kb: 131072" not in text
+
+
+def test_fetch_file_offset_pages_through_large_file(handler, monkeypatch, tmp_path):
+    import guest.crucible_guest_agent as mod
+
+    monkeypatch.setattr(mod, "FETCH_FILE_MAX_BYTES", 8)
+    payload = b"0123456789abcdef"  # 16 bytes = 2 chunks of 8
+    target = tmp_path / "trace.bin"
+    target.write_bytes(payload)
+    monkeypatch.setattr(
+        mod, "GUEST_FILE_ALLOWED_PREFIXES", (str(tmp_path) + "/",)
+    )
+
+    first = handler._handle_fetch_file(
+        GuestCommand(cmd="fetch_file", path=str(target))
+    )
+    assert first.status == "ok"
+    assert base64.b64decode(first.data["contents_b64"]) == payload[:8]
+    assert first.data["truncated"] is True
+    assert first.data["offset"] == 0
+
+    second = handler._handle_fetch_file(
+        GuestCommand(cmd="fetch_file", path=str(target), config={"offset": 8})
+    )
+    assert second.status == "ok"
+    assert base64.b64decode(second.data["contents_b64"]) == payload[8:]
+    assert second.data["truncated"] is False
+
+    bad = handler._handle_fetch_file(
+        GuestCommand(cmd="fetch_file", path=str(target), config={"offset": -1})
+    )
+    assert bad.status == "error"

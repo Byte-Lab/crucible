@@ -167,28 +167,62 @@ def make_profiler_game_tools(registry: ToolRegistry, guest_rpc: Any) -> None:
             }
         # perfetto writes the trace only when the capture ends; if the fetch
         # races the flush the file is briefly absent/empty. Retry a few
-        # times before declaring failure.
-        contents_b64 = None
-        data: dict[str, Any] = {}
+        # times before declaring failure. Each fetch_file response is capped
+        # at ~8 MiB (one vsock message), so page through larger traces with
+        # config.offset until EOF.
+        max_total = 256 * 1024 * 1024  # runaway guard, far above any real trace
+        blob = b""
         last_error = "guest returned no trace contents"
         for attempt in range(4):
             if attempt:
                 time.sleep(3)
-            try:
-                resp = guest_rpc.call("fetch_file", {"path": trace_path})
-            except Exception as exc:
-                last_error = str(exc)
-                continue
-            if resp.get("status") != "ok":
-                last_error = resp.get("message", "fetch_file failed")
-                continue
-            data = resp.get("data", {})
-            contents_b64 = data.get("contents_b64")
-            if contents_b64:
+            chunks: list[bytes] = []
+            offset = 0
+            failed = False
+            while True:
+                try:
+                    resp = guest_rpc.call(
+                        "fetch_file",
+                        {"path": trace_path, "config": {"offset": offset}},
+                    )
+                except Exception as exc:
+                    last_error = str(exc)
+                    failed = True
+                    break
+                if resp.get("status") != "ok":
+                    last_error = resp.get("message", "fetch_file failed")
+                    failed = True
+                    break
+                data = resp.get("data", {})
+                contents_b64 = data.get("contents_b64")
+                if not contents_b64:
+                    last_error = "guest returned no trace contents"
+                    failed = True
+                    break
+                # A guest agent that predates offset support ignores
+                # config.offset and re-serves the first chunk forever —
+                # detect the non-advancing echo and bail instead of looping.
+                if data.get("offset", 0) != offset:
+                    last_error = (
+                        "guest fetch_file ignored config.offset (old guest "
+                        "agent?); cannot page a large trace"
+                    )
+                    failed = True
+                    break
+                chunk = base64.b64decode(contents_b64)
+                chunks.append(chunk)
+                offset += len(chunk)
+                if offset > max_total:
+                    last_error = f"trace exceeds {max_total} bytes, aborting fetch"
+                    failed = True
+                    break
+                if not data.get("truncated"):
+                    break
+            if not failed and chunks and offset > 0:
+                blob = b"".join(chunks)
                 break
-        if not contents_b64:
+        if not blob:
             return {"status": "error", "error": last_error}
-        blob = base64.b64decode(contents_b64)
         host_path = os.path.join(host_output_dir, os.path.basename(trace_path))
         try:
             with open(host_path, "wb") as f:
@@ -199,5 +233,4 @@ def make_profiler_game_tools(registry: ToolRegistry, guest_rpc: Any) -> None:
             "status": "ok",
             "host_path": host_path,
             "size_bytes": len(blob),
-            "truncated": bool(data.get("truncated")),
         }

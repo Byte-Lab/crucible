@@ -370,9 +370,46 @@ def test_profiler_steam_user_message_profiled_run_traces_single_launch():
     )
     msg = ProfilerAgent().build_user_message(task)
     assert "start_profiling" in msg
-    assert "buffer_size_kb=6144" in msg
     assert "stop_profiling" in msg
     assert "fetch_perfetto_trace" in msg
     # Single launch: start_profiling comes before the (only) launch call.
     assert msg.index("start_profiling") < msg.index("launch_steam_benchmark")
     assert msg.count("launch_steam_benchmark(app_id=") == 1
+
+
+def test_fetch_perfetto_trace_pages_chunks_until_eof(tmp_path):
+    # A trace larger than one vsock message must arrive whole via
+    # config.offset paging, not truncated at the first chunk.
+    full = b"\x0a\x0b" + bytes(range(256)) * 3
+    half = len(full) // 2
+
+    class ChunkingRpc:
+        def __init__(self):
+            self.offsets = []
+
+        def call(self, cmd, args):
+            assert cmd == "fetch_file"
+            offset = args.get("config", {}).get("offset", 0)
+            self.offsets.append(offset)
+            chunk = full[offset:offset + half]
+            return {
+                "status": "ok",
+                "data": {
+                    "contents_b64": base64.b64encode(chunk).decode(),
+                    "size": len(full),
+                    "offset": offset,
+                    "truncated": offset + len(chunk) < len(full),
+                },
+            }
+
+    rpc = ChunkingRpc()
+    registry = _registry(rpc)
+    result = registry.call("fetch_perfetto_trace", {
+        "trace_path": "/tmp/crucible_trace.perfetto-trace",
+        "host_output_dir": str(tmp_path),
+    })
+    assert result["status"] == "ok", result
+    assert result["size_bytes"] == len(full)
+    assert rpc.offsets == [0, half]
+    with open(result["host_path"], "rb") as f:
+        assert f.read() == full
