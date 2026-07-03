@@ -4,6 +4,32 @@ use tokio::process::{Child, Command};
 
 use crate::config::VmConfig;
 
+/// Parse a CPU list like "8-15" or "8,9,10,11" (mixed forms allowed) into
+/// an ordered list of host CPU ids. vCPU N pins to the Nth entry.
+pub fn parse_cpu_list(spec: &str) -> Result<Vec<usize>> {
+    let mut cpus = Vec::new();
+    for part in spec.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        if let Some((lo, hi)) = part.split_once('-') {
+            let lo: usize = lo.trim().parse().with_context(|| format!("bad cpu {lo}"))?;
+            let hi: usize = hi.trim().parse().with_context(|| format!("bad cpu {hi}"))?;
+            if hi < lo {
+                anyhow::bail!("inverted cpu range {part}");
+            }
+            cpus.extend(lo..=hi);
+        } else {
+            cpus.push(part.parse().with_context(|| format!("bad cpu {part}"))?);
+        }
+    }
+    if cpus.is_empty() {
+        anyhow::bail!("empty cpu list: {spec:?}");
+    }
+    Ok(cpus)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VmState {
     Stopped,
@@ -345,10 +371,120 @@ impl VmManager {
                 vsock_client.health_check().await
             {
                 tracing::info!("VM is ready");
+                // vCPU threads exist once the guest is up; pin them now so
+                // every measurement runs with the same CPU placement.
+                // Non-fatal: an unpinned run is a noisier run, not a broken
+                // one.
+                if !self.config.vcpu_pin_cpus.is_empty() {
+                    match self.pin_vcpus() {
+                        Ok(n) => tracing::info!(
+                            pinned = n,
+                            cpus = %self.config.vcpu_pin_cpus,
+                            "vCPU threads pinned"
+                        ),
+                        Err(e) => {
+                            tracing::warn!(error = %e, "vCPU pinning failed; continuing unpinned")
+                        }
+                    }
+                }
                 return Ok(());
             }
             tokio::time::sleep(poll_interval).await;
         }
+    }
+
+    /// Pin each `CPU N/KVM` thread of our QEMU grandchild 1:1 onto the
+    /// configured host CPU list. Returns the number of threads pinned.
+    fn pin_vcpus(&self) -> Result<usize> {
+        let cpus = parse_cpu_list(&self.config.vcpu_pin_cpus)?;
+        let pgid = self
+            .child
+            .as_ref()
+            .and_then(|c| c.id())
+            .context("no VM child process")? as i32;
+
+        // vng wraps QEMU in a sh -c chain, so find the grandchild by
+        // process group: we created the group via process_group(0), so its
+        // pgid equals the direct child's pid.
+        let mut pinned = 0usize;
+        for entry in std::fs::read_dir("/proc").context("read /proc")? {
+            let Ok(entry) = entry else { continue };
+            let Some(pid) = entry
+                .file_name()
+                .to_str()
+                .and_then(|s| s.parse::<i32>().ok())
+            else {
+                continue;
+            };
+            let stat = match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            // stat: pid (comm) state ppid pgrp ... — comm may contain
+            // spaces, so parse from the closing paren.
+            let Some(rest) = stat.rsplit_once(')').map(|(_, r)| r) else {
+                continue;
+            };
+            let fields: Vec<&str> = rest.split_whitespace().collect();
+            let proc_pgid: i32 = match fields.get(2).and_then(|s| s.parse().ok()) {
+                Some(v) => v,
+                None => continue,
+            };
+            if proc_pgid != pgid || !stat.contains("(qemu-system-x86") {
+                continue;
+            }
+            let task_dir = format!("/proc/{pid}/task");
+            for task in std::fs::read_dir(&task_dir)
+                .with_context(|| format!("read {task_dir}"))?
+                .flatten()
+            {
+                let Some(tid) = task
+                    .file_name()
+                    .to_str()
+                    .and_then(|s| s.parse::<i32>().ok())
+                else {
+                    continue;
+                };
+                let comm = std::fs::read_to_string(task.path().join("comm"))
+                    .unwrap_or_default();
+                let comm = comm.trim();
+                let Some(idx) = comm
+                    .strip_prefix("CPU ")
+                    .and_then(|r| r.split('/').next())
+                    .and_then(|n| n.parse::<usize>().ok())
+                else {
+                    continue;
+                };
+                let Some(&target) = cpus.get(idx) else {
+                    anyhow::bail!(
+                        "vCPU {idx} has no pin target (vcpu_pin_cpus lists {} CPUs)",
+                        cpus.len()
+                    );
+                };
+                // SAFETY: plain sched_setaffinity on a tid we just
+                // enumerated; a stale tid returns ESRCH which we surface.
+                unsafe {
+                    let mut set: libc::cpu_set_t = std::mem::zeroed();
+                    libc::CPU_SET(target, &mut set);
+                    if libc::sched_setaffinity(
+                        tid,
+                        std::mem::size_of::<libc::cpu_set_t>(),
+                        &set,
+                    ) != 0
+                    {
+                        anyhow::bail!(
+                            "sched_setaffinity(tid={tid}, cpu={target}): {}",
+                            std::io::Error::last_os_error()
+                        );
+                    }
+                }
+                pinned += 1;
+            }
+        }
+        if pinned == 0 {
+            anyhow::bail!("no CPU N/KVM threads found in process group {pgid}");
+        }
+        Ok(pinned)
     }
 
     pub async fn shutdown(&mut self) -> Result<()> {
@@ -431,6 +567,16 @@ impl VmManager {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn parse_cpu_list_ranges_and_singles() {
+        assert_eq!(super::parse_cpu_list("8-11").unwrap(), vec![8, 9, 10, 11]);
+        assert_eq!(super::parse_cpu_list("8,10,12").unwrap(), vec![8, 10, 12]);
+        assert_eq!(super::parse_cpu_list("0-1,4").unwrap(), vec![0, 1, 4]);
+        assert!(super::parse_cpu_list("").is_err());
+        assert!(super::parse_cpu_list("5-2").is_err());
+        assert!(super::parse_cpu_list("x").is_err());
+    }
+
     use super::*;
 
     fn test_vm_config() -> crate::config::VmConfig {

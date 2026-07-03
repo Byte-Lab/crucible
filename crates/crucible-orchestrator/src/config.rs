@@ -50,6 +50,13 @@ pub struct VmConfig {
     pub boot_timeout_secs: u64,
     #[serde(default = "default_vsock_cid")]
     pub vsock_cid: u32,
+    /// Host CPUs to pin vCPU threads to, e.g. "8-15" or "8,9,10,11".
+    /// vCPU N is pinned 1:1 to the Nth listed CPU after each boot.
+    /// Empty = no pinning. Pair with a host-side cpuset shield
+    /// (systemctl set-property --runtime system.slice user.slice
+    /// AllowedCPUs=<the remaining CPUs>) for low-noise measurements.
+    #[serde(default)]
+    pub vcpu_pin_cpus: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
