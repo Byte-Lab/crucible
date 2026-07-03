@@ -594,6 +594,7 @@ impl Orchestrator {
     /// profiling is non-fatal).
     async fn capture_profile(
         &mut self,
+        cycle_id: i64,
         game_name: &str,
     ) -> Result<Vec<serde_json::Value>> {
         let ctx = measurement_context(&self.config, "baseline", game_name, true);
@@ -605,7 +606,32 @@ impl Orchestrator {
             .and_then(|t| t.as_array())
             .cloned()
             .unwrap_or_default();
-        Ok(traces)
+        // The profiler writes to a fixed basename, so each cycle used to
+        // overwrite the previous cycle's trace — which destroyed the
+        // evidence needed to justify a winning patch upstream. Rename to a
+        // cycle-scoped path and hand the analyzer that name.
+        let mut preserved = Vec::with_capacity(traces.len());
+        for (i, t) in traces.iter().enumerate() {
+            let Some(src) = t.as_str() else {
+                preserved.push(t.clone());
+                continue;
+            };
+            let suffix = if i == 0 {
+                String::new()
+            } else {
+                format!("-{i}")
+            };
+            let dst = std::path::Path::new(&self.config.orchestrator.artifact_dir)
+                .join(format!("trace-cycle{cycle_id}-baseline{suffix}.perfetto-trace"));
+            match std::fs::rename(src, &dst) {
+                Ok(()) => preserved.push(serde_json::json!(dst.to_string_lossy())),
+                Err(e) => {
+                    tracing::warn!(src, error = %e, "could not preserve trace under cycle-scoped name");
+                    preserved.push(t.clone());
+                }
+            }
+        }
+        Ok(preserved)
     }
 
     pub async fn run_cycle(&mut self) -> Result<()> {
@@ -661,7 +687,7 @@ impl Orchestrator {
         // Collect runs_per_phase clean samples, then one profiled run for
         // the analyzer's kernel trace.
         self.measure_phase(cycle_id, "baseline", game_name).await?;
-        let baseline_traces = match self.capture_profile(game_name).await {
+        let baseline_traces = match self.capture_profile(cycle_id, game_name).await {
             Ok(t) => t,
             Err(e) => {
                 tracing::warn!(error = %e, "profile capture failed; analyzing without a trace");
