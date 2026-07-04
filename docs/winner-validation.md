@@ -63,3 +63,12 @@ Consequences for the winner bar:
   replication in an independent cycle before counting a tail-only win.
 - A tail win accompanied by a same-direction fps_avg shift is stronger
   than tail alone.
+
+Second A/A finding (2026-07-04, cycle 23): with no patch applied the
+cycle skipped the phase-boundary reboot, so comparison ran later in a
+WARMER boot — fps_avg drifted +4.8% "significant" on an identical
+kernel. Structural, not statistical: within-boot warming biases any
+no-reboot comparison toward accept. Fixed by rebooting the same kernel
+at the boundary of unpatched cycles; A/A results recorded before that
+fix (cycles 13, 20, 21, 23) carry this bias and are calibration-invalid
+for fps_avg.
