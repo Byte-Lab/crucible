@@ -257,7 +257,7 @@ fn default_max_tokens() -> u32 {
     4096
 }
 fn default_review_rounds() -> u32 {
-    3
+    8
 }
 fn default_max_attempts() -> u32 {
     3
