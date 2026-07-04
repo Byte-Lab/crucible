@@ -498,30 +498,11 @@ impl VmManager {
         if pinned == 0 {
             anyhow::bail!("no CPU N/KVM threads found in process group {pgid}");
         }
-        // vhost kernel threads (vsock) are named vhost-<qemu-pid> and live
-        // outside the process group; they do per-packet work and belong on
-        // the emulator CPUs too.
-        if let Some(ecpus) = &emulator_cpus {
-            for qpid in &qemu_pids {
-                let want = format!("vhost-{qpid}");
-                for entry in std::fs::read_dir("/proc").context("read /proc")?.flatten() {
-                    let Some(pid) = entry
-                        .file_name()
-                        .to_str()
-                        .and_then(|s| s.parse::<i32>().ok())
-                    else {
-                        continue;
-                    };
-                    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm"))
-                        .unwrap_or_default();
-                    if comm.trim() == want {
-                        if let Err(e) = Self::set_affinity(pid, ecpus) {
-                            tracing::warn!(pid, error = %e, "vhost pin failed");
-                        }
-                    }
-                }
-            }
-        }
+        // vhost kernel threads (vsock) deliberately stay UNPINNED: vsock
+        // is quiet during measurement windows (RPCs/fetches happen between
+        // runs), so pinning buys no fidelity, and floating lets the
+        // scheduler place vhost near the waiting vCPU (vring locality).
+        let _ = &qemu_pids;
         Ok(pinned)
     }
 
