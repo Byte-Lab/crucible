@@ -392,6 +392,25 @@ impl Orchestrator {
         Ok(())
     }
 
+    /// Reboot the VM on the current (unchanged) kernel image. Used at the
+    /// baseline/comparison phase boundary of unpatched cycles so both cycle
+    /// shapes measure their comparison phase from an identical fresh-boot
+    /// state.
+    pub async fn reboot_same_kernel(&mut self) -> Result<()> {
+        let kernel = self
+            .current_kernel
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("no current kernel to reboot into"))?;
+        self.vm_manager.shutdown().await?;
+        let kernel_str = kernel.to_string_lossy().to_string();
+        self.vm_manager.boot(&kernel_str).await?;
+        let timeout = Duration::from_secs(self.config.vm.boot_timeout_secs);
+        self.vm_manager
+            .wait_for_ready(&self.vsock_client, timeout)
+            .await?;
+        Ok(())
+    }
+
     /// Apply a patch to the kernel source, rebuild, then reboot the VM with
     /// the new image. Caller is responsible for persisting the patch row in
     /// the `patches` table separately.
@@ -1043,6 +1062,15 @@ impl Orchestrator {
                     attempt = attempt_number,
                     "no patch_path in optimization output, skipping apply"
                 );
+                // Reboot anyway: patched cycles get a fresh boot between
+                // phases, so an unpatched cycle must too, or its comparison
+                // runs later in a warmer boot and fps_avg drifts upward —
+                // observed +4.8% "significant" on an identical kernel
+                // (cycle 23 A/A accept). Without this, no-patch cycles are
+                // biased toward accept instead of being calibration data.
+                if let Err(e) = self.reboot_same_kernel().await {
+                    tracing::warn!(error = %e, "phase-boundary reboot failed; comparison may carry warm-boot bias");
+                }
             }
 
             // Optimizer tunings: apply proposed sysctls in the (possibly
