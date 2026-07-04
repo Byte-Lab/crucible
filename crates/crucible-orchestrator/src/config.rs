@@ -147,6 +147,15 @@ pub struct OptimizerConfig {
     pub max_attempts_per_bottleneck: u32,
     #[serde(default = "default_allowed_layers")]
     pub allowed_layers: Vec<String>,
+    /// Adversarial patch-review rounds between GenerateOptimization and
+    /// ApplyChanges. Each round: the PatchReviewer audits the diff
+    /// (round 1 sees the diff + trace facts only — not the author's
+    /// rationale); on revise/scrap the optimizer must address the
+    /// critiques or concede. approve → apply; concede / repeated scrap /
+    /// round-cap → the patch is dropped and the cycle continues
+    /// unpatched. 0 disables review.
+    #[serde(default = "default_review_rounds")]
+    pub max_review_rounds: u32,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
@@ -247,6 +256,9 @@ fn default_timeout() -> u64 {
 fn default_max_tokens() -> u32 {
     4096
 }
+fn default_review_rounds() -> u32 {
+    3
+}
 fn default_max_attempts() -> u32 {
     3
 }
@@ -296,6 +308,7 @@ impl Default for OptimizerConfig {
         Self {
             max_attempts_per_bottleneck: default_max_attempts(),
             allowed_layers: default_allowed_layers(),
+            max_review_rounds: default_review_rounds(),
         }
     }
 }

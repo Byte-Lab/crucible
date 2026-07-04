@@ -34,6 +34,7 @@ impl AgentRunner {
             AgentName::Profiler => "profiler",
             AgentName::Analyzer => "analyzer",
             AgentName::Optimizer => "optimizer",
+            AgentName::PatchReviewer => "patch_reviewer",
             AgentName::Echo => "echo",
         };
         format!("agents.{}.agent", module)

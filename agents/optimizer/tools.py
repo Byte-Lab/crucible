@@ -12,22 +12,11 @@ MAX_TOOL_RESULT_BYTES = 200_000
 MAX_SEARCH_MATCHES = 500
 
 
-def make_optimizer_tools(registry: ToolRegistry, kernel_src: str) -> None:
-    """Register optimizer tools into the given registry.
+def make_kernel_read_tools(registry: ToolRegistry, kernel_src: str) -> None:
+    """Register the read-only kernel navigation tools.
 
-    The optimizer workflow is read → edit → finalize:
-
-    1. `read_source_file` / `search_kernel_source` / `list_source_files`
-       to navigate the tree.
-    2. `edit_file` to replace exact text spans. Each call mutates the
-       host tree in place.
-    3. `finalize_patch` exactly once at the end: captures the full
-       `git diff` of all edits into `.crucible_patches/<filename>` and
-       reverts the working tree so the orchestrator can re-apply the
-       canonical diff via `git apply`.
-
-    Diffs come from git itself, so hunk headers are always well-formed —
-    no more "corrupt patch" rejections from `git apply`.
+    Shared between the optimizer (which additionally gets edit/finalize)
+    and the patch reviewer (which must NOT be able to edit — it audits).
     """
 
     @registry.tool(
@@ -85,6 +74,26 @@ def make_optimizer_tools(registry: ToolRegistry, kernel_src: str) -> None:
             return {"error": "grep not found"}
         except subprocess.TimeoutExpired:
             return {"error": "search timed out"}
+
+
+def make_optimizer_tools(registry: ToolRegistry, kernel_src: str) -> None:
+    """Register optimizer tools into the given registry.
+
+    The optimizer workflow is read → edit → finalize:
+
+    1. `read_source_file` / `search_kernel_source` / `list_source_files`
+       to navigate the tree.
+    2. `edit_file` to replace exact text spans. Each call mutates the
+       host tree in place.
+    3. `finalize_patch` exactly once at the end: captures the full
+       `git diff` of all edits into `.crucible_patches/<filename>` and
+       reverts the working tree so the orchestrator can re-apply the
+       canonical diff via `git apply`.
+
+    Diffs come from git itself, so hunk headers are always well-formed —
+    no more "corrupt patch" rejections from `git apply`.
+    """
+    make_kernel_read_tools(registry, kernel_src)
 
     @registry.tool(
         description=(

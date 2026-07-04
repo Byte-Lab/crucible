@@ -225,6 +225,19 @@ fn extract_patch_path(value: &serde_json::Value) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// A hard scrap marker replacing a reviewed-out optimization. A plain
+/// top-level empty patch_path is NOT enough: extract_patch_path falls
+/// through to the inner response JSON, which still names the diff.
+fn scrapped_optimization(reason: &str) -> serde_json::Value {
+    serde_json::json!({
+        "layer": "kernel",
+        "patch_path": "",
+        "sysctl_changes": [],
+        "scrapped_by_review": reason,
+        "response": "{}",
+    })
+}
+
 /// Pull the optimizer's proposed sysctl tunings out of its envelope:
 /// `sysctl_changes: [{"key": "kernel.x", "value": "123", ...}, ...]` →
 /// a key→value map. Same top-level-then-parsed fallback as
@@ -634,6 +647,127 @@ impl Orchestrator {
         Ok(preserved)
     }
 
+    /// Adversarial patch review between GenerateOptimization and
+    /// ApplyChanges. Returns the final optimization output: unchanged when
+    /// there is no patch or review is disabled, a (possibly revised)
+    /// approved optimization, or one with its patch dropped on scrap.
+    ///
+    /// Round 1 hands the reviewer only the diff + the analyzer's
+    /// trace-derived facts — not the author's rationale — so the audit is
+    /// minimally biased by the author's advocacy. Later rounds carry the
+    /// critique/response history; author responses are labeled as claims
+    /// for the reviewer to verify. Consensus mapping: reviewer approve →
+    /// apply; author concession (empty patch_path) or reviewer scrapping
+    /// twice in a row or the round cap → scrap.
+    async fn review_patch(
+        &mut self,
+        cycle_id: i64,
+        analysis: &serde_json::Value,
+        optimize_context: &serde_json::Value,
+        mut optimization: serde_json::Value,
+    ) -> serde_json::Value {
+        let max_rounds = self.config.agents.optimizer.max_review_rounds;
+        if max_rounds == 0 {
+            return optimization;
+        }
+        let mut prior_rounds: Vec<serde_json::Value> = Vec::new();
+        let mut scrap_streak = 0u32;
+        for round in 1..=max_rounds {
+            let Some(patch_path) = extract_patch_path(&optimization) else {
+                // Author conceded (or never produced a patch): agreement to
+                // scrap — nothing to review.
+                if !prior_rounds.is_empty() {
+                    tracing::info!(cycle_id, round, "author conceded patch under review; scrapped");
+                }
+                return optimization;
+            };
+            let diff_text = match std::fs::read_to_string(&patch_path) {
+                Ok(t) => t,
+                Err(e) => {
+                    tracing::warn!(patch = %patch_path, error = %e, "cannot read patch for review; passing through unreviewed");
+                    return optimization;
+                }
+            };
+            let mut review_ctx = serde_json::json!({
+                "action": "review_patch",
+                "cycle_id": cycle_id,
+                "round": round,
+                "patch_diff": diff_text,
+                "bottleneck": analysis,
+                "kernel_src": self.config.vm.kernel_src,
+                "workload_mode": self.config.measurement.mode,
+                "workload_args": self.config.measurement.benchmark_args,
+            });
+            if !prior_rounds.is_empty() {
+                review_ctx["prior_rounds"] = serde_json::Value::Array(prior_rounds.clone());
+            }
+            let review = match self.run_agent(AgentName::PatchReviewer, review_ctx).await {
+                Ok(r) => r,
+                Err(e) => {
+                    // Review infrastructure failure must not kill the cycle;
+                    // fall back to the unreviewed patch and say so loudly.
+                    tracing::warn!(error = %e, "patch reviewer failed; applying unreviewed patch");
+                    return optimization;
+                }
+            };
+            let parsed = parse_agent_response(&review);
+            let verdict = parsed["verdict"].as_str().unwrap_or("revise").to_string();
+            let summary = parsed["summary"].as_str().unwrap_or("").to_string();
+            tracing::info!(cycle_id, round, verdict = %verdict, summary = %summary, "patch review verdict");
+
+            match verdict.as_str() {
+                "approve" => return optimization,
+                "scrap" if scrap_streak >= 1 => {
+                    // Second consecutive scrap: the author's defense did not
+                    // convince the reviewer. Drop the patch.
+                    tracing::info!(cycle_id, round, "reviewer scrapped twice; dropping patch");
+                    return scrapped_optimization("reviewer scrapped twice");
+                }
+                other => {
+                    scrap_streak = if other == "scrap" { scrap_streak + 1 } else { 0 };
+                    // Hand the critiques back to the author for a revision
+                    // (or a concession). finalize_patch reverts the tree, but
+                    // make sure it is clean before the optimizer re-edits.
+                    if let Err(e) = self.kernel_builder.revert_patch().await {
+                        tracing::warn!(error = %e, "pre-revision revert failed; continuing");
+                    }
+                    let mut revise_ctx = optimize_context.clone();
+                    revise_ctx["review_feedback"] = serde_json::json!({
+                        "verdict": verdict,
+                        "summary": summary,
+                        "critiques": parsed["critiques"].clone(),
+                    });
+                    revise_ctx["prior_patch_diff"] = serde_json::json!(diff_text);
+                    let revised = match self.run_agent(AgentName::Optimizer, revise_ctx).await {
+                        Ok(r) => r,
+                        Err(e) => {
+                            tracing::warn!(error = %e, "optimizer revision failed; dropping patch");
+                            return scrapped_optimization("optimizer revision failed");
+                        }
+                    };
+                    let author_response = parse_agent_response(&revised)["rationale"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_string();
+                    prior_rounds.push(serde_json::json!({
+                        "round": round,
+                        "reviewer_verdict": verdict,
+                        "reviewer_critiques": parsed["critiques"].clone(),
+                        "author_response_claims": author_response,
+                    }));
+                    optimization = revised;
+                }
+            }
+        }
+        // Round cap without approval: conservative scrap.
+        tracing::info!(
+            cycle_id,
+            max_rounds,
+            "review round cap reached without approval; dropping patch"
+        );
+        scrapped_optimization("review round cap reached")
+    }
+
     pub async fn run_cycle(&mut self) -> Result<()> {
         // SelectGame
         self.state_machine
@@ -853,9 +987,18 @@ impl Orchestrator {
                 optimize_context["explored_areas"] =
                     serde_json::Value::Array(explored_areas.clone());
             }
-            let optimization = self
-                .run_agent(AgentName::Optimizer, optimize_context)
+            let mut optimization = self
+                .run_agent(AgentName::Optimizer, optimize_context.clone())
                 .await?;
+
+            // Adversarial review loop (user rule, 2026-07-04): every
+            // generated patch is audited by an independent reviewer BEFORE a
+            // measurement cycle is spent on it. The loop ends in mutual
+            // agreement: approve (apply it) or scrap (drop it — the cycle
+            // continues unpatched, which doubles as A/A calibration).
+            optimization = self
+                .review_patch(cycle_id, &analysis, &optimize_context, optimization)
+                .await;
 
             // ApplyChanges
             self.state_machine
@@ -1188,6 +1331,13 @@ mod tests {
         let raw = serde_json::json!({"response": "just plain text"});
         let parsed = parse_agent_response(&raw);
         assert_eq!(parsed["response"], "just plain text");
+    }
+
+    #[test]
+    fn scrapped_optimization_kills_patch_and_sysctls() {
+        let scrapped = scrapped_optimization("test");
+        assert!(extract_patch_path(&scrapped).is_none());
+        assert!(extract_sysctl_changes(&scrapped).is_empty());
     }
 
     #[test]

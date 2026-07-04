@@ -57,6 +57,7 @@ echo          = 512
 
 [agents.optimizer]
 max_attempts_per_bottleneck = 3
+max_review_rounds = 3
 allowed_layers = ["kernel", "userspace", "tuning"]
 
 [agents.game_player]

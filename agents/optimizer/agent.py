@@ -61,6 +61,25 @@ Respond with JSON only (no prose, no fences):
         kernel_src = context.get("kernel_src", "/home/void/upstream/linux")
         msg = f"Generate optimizations for {game} (attempt {attempt}).\n"
         msg += f"Bottleneck:\n{json.dumps(bottleneck, indent=2)}\n"
+        review = context.get("review_feedback")
+        if review:
+            msg += (
+                "\nADVERSARIAL REVIEW of your previous patch (below). The "
+                "reviewer's verdict was "
+                f"'{review.get('verdict', 'revise')}'. Critiques:\n"
+                f"{json.dumps(review.get('critiques', []), indent=1)}\n"
+                f"Reviewer summary: {review.get('summary', '')}\n"
+                "Your previous diff:\n```diff\n"
+                f"{context.get('prior_patch_diff', '')}\n```\n"
+                "Address every critique with a REVISED patch (re-read the "
+                "source, re-edit from the clean tree, finalize_patch with "
+                "the SAME filename), and put a point-by-point response to "
+                "the critiques in your rationale. If you conclude a "
+                "critique is fatal and the approach cannot be fixed, "
+                "CONCEDE: return patch_path as the empty string with a "
+                "rationale explaining why the patch should be scrapped. Do "
+                "not defend a broken patch.\n"
+            )
         if attempt > 1:
             msg += f"Previous attempts: {json.dumps(context.get('previous_attempts', []))}\nTry different approach.\n"
         msg += f"Kernel source: {kernel_src}\n"

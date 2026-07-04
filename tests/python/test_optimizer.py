@@ -200,3 +200,32 @@ def test_search_kernel_source_output_is_capped(tmp_path):
     assert result["truncated"] is True
     assert result["count"] <= 500
     assert len(json.dumps(result)) < 256_000
+
+
+def test_optimizer_review_feedback_branch():
+    from uuid import uuid4
+
+    from agents.common.protocol import AgentConfig, TaskEnvelope
+    from agents.optimizer.agent import OptimizerAgent
+
+    task = TaskEnvelope(
+        task_id=uuid4(),
+        agent="optimizer",
+        context={
+            "action": "optimize",
+            "game_name": "civ6",
+            "bottleneck": {"root_cause": "x"},
+            "review_feedback": {
+                "verdict": "revise",
+                "summary": "comment does not match code",
+                "critiques": [{"severity": "major", "issue": "off-by-one", "suggestion": "fix"}],
+            },
+            "prior_patch_diff": "diff --git a/x b/x",
+        },
+        config=AgentConfig(model="m", max_tokens=1, timeout_seconds=1),
+    )
+    msg = OptimizerAgent().build_user_message(task)
+    assert "ADVERSARIAL REVIEW" in msg
+    assert "off-by-one" in msg
+    assert "CONCEDE" in msg
+    assert "diff --git a/x b/x" in msg
