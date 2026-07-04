@@ -168,7 +168,12 @@ STEAM_FIRSTPARTY_BENCHMARK_GLOBS: dict[int, str] = {
 # The first-party log is written by the game during/after the benchmark
 # scene; poll it for size-stability this long after the MangoHud log
 # settles before giving up (the benchmark may still be mid-flythrough).
-FIRSTPARTY_LOG_WAIT_SECS = 300
+# 600 not 300: a cold first launch (empty shader cache + 68G assets over
+# 9p) can push flythrough completion past 300s — and a launch RPC that
+# returns while the game is still running poisons the NEXT run, whose
+# -applaunch IPC becomes a no-op against the running instance (observed
+# 2026-07-04: warmup fp-miss → run cascade of no-CSV failures).
+FIRSTPARTY_LOG_WAIT_SECS = 600
 WESTON_WARMUP_SECS = 6
 # Steam's CM logon needs a route out. vng's slirp netdev provides one,
 # but the minimal rootfs runs no network manager — the agent DHCPs the
