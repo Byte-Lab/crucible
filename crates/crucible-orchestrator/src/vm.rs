@@ -411,6 +411,14 @@ impl VmManager {
     /// configured host CPU list. Returns the number of threads pinned.
     fn pin_vcpus(&self) -> Result<usize> {
         let cpus = parse_cpu_list(&self.config.vcpu_pin_cpus)?;
+        let emulator_cpus = {
+            let spec = self.config.emulator_pin_cpus.trim();
+            if spec.is_empty() {
+                None
+            } else {
+                Some(parse_cpu_list(spec)?)
+            }
+        };
         let pgid = self
             .child
             .as_ref()
@@ -421,6 +429,7 @@ impl VmManager {
         // process group: we created the group via process_group(0), so its
         // pgid equals the direct child's pid.
         let mut pinned = 0usize;
+        let mut qemu_pids: Vec<i32> = Vec::new();
         for entry in std::fs::read_dir("/proc").context("read /proc")? {
             let Ok(entry) = entry else { continue };
             let Some(pid) = entry
@@ -447,6 +456,7 @@ impl VmManager {
             if proc_pgid != pgid || !stat.contains("(qemu-system-x86") {
                 continue;
             }
+            qemu_pids.push(pid);
             let task_dir = format!("/proc/{pid}/task");
             for task in std::fs::read_dir(&task_dir)
                 .with_context(|| format!("read {task_dir}"))?
@@ -467,6 +477,12 @@ impl VmManager {
                     .and_then(|r| r.split('/').next())
                     .and_then(|n| n.parse::<usize>().ok())
                 else {
+                    // Not a vCPU: an emulator helper (9p workers, main
+                    // loop, RCU). Keep it off the vCPU cores when an
+                    // emulator set is configured.
+                    if let Some(ecpus) = &emulator_cpus {
+                        Self::set_affinity(tid, ecpus)?;
+                    }
                     continue;
                 };
                 let Some(&target) = cpus.get(idx) else {
@@ -475,30 +491,59 @@ impl VmManager {
                         cpus.len()
                     );
                 };
-                // SAFETY: plain sched_setaffinity on a tid we just
-                // enumerated; a stale tid returns ESRCH which we surface.
-                unsafe {
-                    let mut set: libc::cpu_set_t = std::mem::zeroed();
-                    libc::CPU_SET(target, &mut set);
-                    if libc::sched_setaffinity(
-                        tid,
-                        std::mem::size_of::<libc::cpu_set_t>(),
-                        &set,
-                    ) != 0
-                    {
-                        anyhow::bail!(
-                            "sched_setaffinity(tid={tid}, cpu={target}): {}",
-                            std::io::Error::last_os_error()
-                        );
-                    }
-                }
+                Self::set_affinity(tid, &[target])?;
                 pinned += 1;
             }
         }
         if pinned == 0 {
             anyhow::bail!("no CPU N/KVM threads found in process group {pgid}");
         }
+        // vhost kernel threads (vsock) are named vhost-<qemu-pid> and live
+        // outside the process group; they do per-packet work and belong on
+        // the emulator CPUs too.
+        if let Some(ecpus) = &emulator_cpus {
+            for qpid in &qemu_pids {
+                let want = format!("vhost-{qpid}");
+                for entry in std::fs::read_dir("/proc").context("read /proc")?.flatten() {
+                    let Some(pid) = entry
+                        .file_name()
+                        .to_str()
+                        .and_then(|s| s.parse::<i32>().ok())
+                    else {
+                        continue;
+                    };
+                    let comm = std::fs::read_to_string(format!("/proc/{pid}/comm"))
+                        .unwrap_or_default();
+                    if comm.trim() == want {
+                        if let Err(e) = Self::set_affinity(pid, ecpus) {
+                            tracing::warn!(pid, error = %e, "vhost pin failed");
+                        }
+                    }
+                }
+            }
+        }
         Ok(pinned)
+    }
+
+    /// sched_setaffinity a task onto the given CPU set.
+    fn set_affinity(tid: i32, cpus: &[usize]) -> Result<()> {
+        // SAFETY: plain sched_setaffinity on tids we just enumerated; a
+        // stale tid returns ESRCH which we surface.
+        unsafe {
+            let mut set: libc::cpu_set_t = std::mem::zeroed();
+            for &c in cpus {
+                libc::CPU_SET(c, &mut set);
+            }
+            if libc::sched_setaffinity(tid, std::mem::size_of::<libc::cpu_set_t>(), &set)
+                != 0
+            {
+                anyhow::bail!(
+                    "sched_setaffinity(tid={tid}, cpus={cpus:?}): {}",
+                    std::io::Error::last_os_error()
+                );
+            }
+        }
+        Ok(())
     }
 
     pub async fn shutdown(&mut self) -> Result<()> {

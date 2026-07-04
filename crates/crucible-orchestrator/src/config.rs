@@ -57,6 +57,12 @@ pub struct VmConfig {
     /// AllowedCPUs=<the remaining CPUs>) for low-noise measurements.
     #[serde(default)]
     pub vcpu_pin_cpus: String,
+    /// Host CPUs for QEMU's NON-vCPU threads (I/O workers, main loop) and
+    /// the vhost kernel thread, e.g. "0-7,16-23". Keeps emulator helpers
+    /// off the vCPU cores so they can't dirty the VM's LLC or steal vCPU
+    /// time mid-measurement. Empty = leave them floating.
+    #[serde(default)]
+    pub emulator_pin_cpus: String,
     /// Guest SMP topology appended to `cpus`, e.g. "sockets=1,cores=8,threads=2"
     /// (must multiply out to `cpus`). Emitted as a `-smp` override in
     /// qemu-opts so the guest kernel sees the same core/SMT structure the
