@@ -43,3 +43,23 @@ reach for; the table above picks the members runnable in the Crucible guest.
 3. Welch base-vs-patched per benchmark; append a "Subsystem regression
    suite" section to `EVIDENCE.md` with raw numbers and analysis.
 4. Only then is the package submission-ready.
+
+## Measurement calibration (accidental A/A tests)
+
+When the optimizer declines to emit a patch, the cycle still measures
+baseline vs comparison on the IDENTICAL kernel — a free A/A test of the
+measurement system. Treat these as calibration gold; do not discard.
+
+Observed 2026-07-04 (cycle 13, aibenchmark, full isolation, n=4/side):
+fps_avg passed A/A (+0.3%, neutral) but fps_p1 (-3.6%) and
+frame_time_p99 (+3.8%) both flagged "significant" regressions with no
+kernel change — a single weak-tail run in one phase drives both, since
+the two metrics are the same order statistic inverted.
+
+Consequences for the winner bar:
+- fps_avg significance at n=4 is trustworthy as measured.
+- Tail-metric (fps_p1 / frame_time_p99) significance at n=4 and p<0.05
+  is NOT sufficient on its own: require either p<0.01, n>=6, or
+  replication in an independent cycle before counting a tail-only win.
+- A tail win accompanied by a same-direction fps_avg shift is stronger
+  than tail alone.
