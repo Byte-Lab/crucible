@@ -225,6 +225,23 @@ fn extract_patch_path(value: &serde_json::Value) -> Option<String> {
         .map(|s| s.to_string())
 }
 
+/// One-line description of the guest's real GPU stack for the analyzer /
+/// optimizer / reviewer contexts, so patches target live driver paths.
+fn gpu_stack_description(config: &crate::config::CrucibleConfig) -> String {
+    let dev = config.vm.vfio_device.trim();
+    if dev.is_empty() || dev.eq_ignore_ascii_case("none") {
+        "no GPU passthrough: Mesa renders in software (llvmpipe/lavapipe); \
+         no amdgpu and no virtio-gpu hardware paths are exercised"
+            .to_string()
+    } else {
+        format!(
+            "VFIO passthrough of host GPU {dev} driven by the amdgpu driver \
+             in-guest; there is NO virtio-gpu/virtio-drm device (QEMU runs \
+             -vga none), so drivers/gpu/drm/virtio is dead code in this guest"
+        )
+    }
+}
+
 /// A hard scrap marker replacing a reviewed-out optimization. A plain
 /// top-level empty patch_path is NOT enough: extract_patch_path falls
 /// through to the inner response JSON, which still names the diff.
@@ -716,6 +733,7 @@ impl Orchestrator {
                 "kernel_src": self.config.vm.kernel_src,
                 "workload_mode": self.config.measurement.mode,
                 "workload_args": self.config.measurement.benchmark_args,
+                "gpu_stack": gpu_stack_description(&self.config),
             });
             if !prior_rounds.is_empty() {
                 review_ctx["prior_rounds"] = serde_json::Value::Array(prior_rounds.clone());
@@ -930,6 +948,13 @@ impl Orchestrator {
                 // threads, no game) for a failed game capture.
                 "workload_kind": self.config.measurement.mode,
                 "workload_args": self.config.measurement.benchmark_args,
+                // The guest's ACTUAL GPU stack. Cycle 28 spent a full
+                // measurement on a correct-but-unreachable virtio-gpu patch:
+                // with VFIO passthrough there is no virtio-gpu device in the
+                // guest at all (-vga none), so drivers/gpu/drm/virtio is
+                // dead code there. Tell the agents which driver actually
+                // renders so patches land on live paths.
+                "gpu_stack": gpu_stack_description(&self.config),
             });
             // The profiled baseline run leaves a Perfetto kernel trace on
             // the host; hand it to the analyzer so bottleneck hunting is
@@ -997,6 +1022,7 @@ impl Orchestrator {
                 // guessing from the bottleneck summary alone.
                 "workload_mode": self.config.measurement.mode,
                 "workload_args": self.config.measurement.benchmark_args,
+                "gpu_stack": gpu_stack_description(&self.config),
             });
             if !previous_attempts.is_empty() {
                 optimize_context["previous_attempts"] =

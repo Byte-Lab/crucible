@@ -58,6 +58,9 @@ Respond with JSON: {"bottleneck": "<subsystem>", "severity": "high|medium|low", 
                 "recommending a DIFFERENT mechanism in that same family is "
                 "encouraged.\n"
             )
+        gpu = context.get("gpu_stack")
+        if gpu:
+            msg += f"GPU stack reality (do not patch drivers that are not in use): {gpu}\n"
         msg += "Use tools to identify the primary bottleneck."
         return msg
 

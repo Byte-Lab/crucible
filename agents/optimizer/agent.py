@@ -88,6 +88,9 @@ Respond with JSON only (no prose, no fences):
             )
         if attempt > 1:
             msg += f"Previous attempts: {json.dumps(context.get('previous_attempts', []))}\nTry different approach.\n"
+        gpu = context.get("gpu_stack")
+        if gpu:
+            msg += f"GPU stack reality (do not patch drivers that are not in use): {gpu}\n"
         msg += f"Kernel source: {kernel_src}\n"
         workload_args = context.get("workload_args")
         if workload_args:
