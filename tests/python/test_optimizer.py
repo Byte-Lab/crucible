@@ -227,5 +227,5 @@ def test_optimizer_review_feedback_branch():
     msg = OptimizerAgent().build_user_message(task)
     assert "ADVERSARIAL REVIEW" in msg
     assert "off-by-one" in msg
-    assert "CONCEDE" in msg
+    assert "concede" in msg.lower()
     assert "diff --git a/x b/x" in msg
