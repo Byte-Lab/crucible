@@ -72,3 +72,14 @@ no-reboot comparison toward accept. Fixed by rebooting the same kernel
 at the boundary of unpatched cycles; A/A results recorded before that
 fix (cycles 13, 20, 21, 23) carry this bias and are calibration-invalid
 for fps_avg.
+
+Third A/A finding (2026-07-05, cycle 27, symmetric reboots in place):
+fps_avg -3.5% flagged significant on identical kernels. Boot-to-boot
+phase-mean variance (Steam client state, shader cache) exceeds what
+within-phase samples imply, so Welch at n=4 under-covers. Empirical
+A/A band observed so far: roughly +/-5% on fps_avg phase means.
+Winner bar addition: a single-cycle fps_avg accept inside +/-5% must
+replicate in an independent cycle before it counts; effects above the
+band (e.g. cycle 17's +8.3%) remain credible on one cycle plus the
+subsystem suite. Future structural fix worth considering: A/B/A/B
+phase interleaving to cancel boot drift.
