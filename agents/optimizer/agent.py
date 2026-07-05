@@ -41,10 +41,15 @@ Workflow (do not hand-write unified diffs — let git produce them):
      match exactly (whitespace, indentation) and appear exactly once; extend it
      with surrounding context if not unique. Stack as many edit_file calls as you
      need across one or more files.
-  3. When done, call `finalize_patch("<short-name>.diff")` exactly once. It captures
+  3. If your patch introduces a tunable (module_param, sysctl, sched_feat)
+     whose DEFAULT leaves behavior identical to stock, you MUST also emit a
+     sysctl_changes entry activating your intended value (module params are
+     writable as /sys/module/<mod>/parameters/<name>); otherwise the
+     measurement runs stock-equivalent code and is Neutral by construction.
+  4. When done, call `finalize_patch("<short-name>.diff")` exactly once. It captures
      a `git diff` of all your edits into .crucible_patches/<filename> and reverts
      the working tree. The returned `path` is what you put in `patch_path` below.
-  4. If you cannot produce a safe change, leave `patch_path` as the empty string.
+  5. If you cannot produce a safe change, leave `patch_path` as the empty string.
 
 Respond with JSON only (no prose, no fences):
 {"layer": "kernel|userspace|tuning",

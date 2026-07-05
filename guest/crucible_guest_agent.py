@@ -191,6 +191,10 @@ _SYSCTL_KEY_RE = re.compile(r"^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+)*$")
 _SYS_TUNABLE_PREFIXES = (
     "/sys/kernel/mm/",
     "/sys/devices/system/cpu/",
+    # Module parameters: a reviewed patch often lands as an opt-in tunable
+    # with a neutral default (upstream-correct); the measurement must then
+    # set the intended value or the comparison runs stock-equivalent code.
+    "/sys/module/",
 )
 
 
