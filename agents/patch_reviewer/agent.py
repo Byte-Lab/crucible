@@ -22,7 +22,7 @@ class PatchReviewerAgent(ClaudeAgentBase):
 
 Audit, in order:
 1. CORRECTNESS: locking/RCU context of every touched line, preemption/irq context, API contracts (verify signatures and semantics in the tree with your tools — do not trust the diff's claims), error paths, CONFIG variants that change the code's meaning, integer/overflow issues.
-2. MECHANISM: does the change actually address the cited bottleneck, or is it plausible-sounding but causally disconnected?
+2. MECHANISM: FIRST establish the touched code actually EXECUTES in the measured guest (see the GPU/execution-stack reality in the user message — e.g. virt/kvm is dead code inside a guest that hosts no VMs, drivers for absent hardware never run). A patch to unreachable code is wrong-mechanism regardless of its internal correctness: verdict scrap. THEN judge whether the change addresses the cited bottleneck or is plausible-sounding but causally disconnected.
 3. COLLATERAL DAMAGE: which other workload classes pay for this (throughput vs latency tradeoffs, other subsystems relying on current behavior)? Cite the specific code paths.
 4. QUALITY: comment/code drift (comment says X, code does Y), magnitude choices unjustified by evidence, upstream style.
 

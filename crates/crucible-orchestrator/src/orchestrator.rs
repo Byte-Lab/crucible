@@ -237,7 +237,12 @@ fn gpu_stack_description(config: &crate::config::CrucibleConfig) -> String {
         format!(
             "VFIO passthrough of host GPU {dev} driven by the amdgpu driver \
              in-guest; there is NO virtio-gpu/virtio-drm device (QEMU runs \
-             -vga none), so drivers/gpu/drm/virtio is dead code in this guest"
+             -vga none), so drivers/gpu/drm/virtio is dead code in this guest. \
+             The measured kernel runs as a KVM GUEST and hosts no VMs itself: \
+             virt/kvm, host-side VFIO, and all hypervisor-side code are dead \
+             code in the measured kernel (paravirt guest ops like kvmclock \
+             and halt-in-guest DO run). Storage is virtio-blk/9p; network is \
+             virtio-net; there is no physical NIC/disk driver in use."
         )
     }
 }
