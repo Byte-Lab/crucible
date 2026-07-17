@@ -73,4 +73,4 @@ files struct with RCU", 2005); the read path that makes fd_array
 hot through fdt->fd long postdates the comment's read/write-split
 design.
 
-Signed-off-by: David Vernet <void@mainfault.com>
+Signed-off-by: David Vernet <void@manifault.com>
