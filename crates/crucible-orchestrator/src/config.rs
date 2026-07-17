@@ -11,6 +11,10 @@ pub struct CrucibleConfig {
     pub measurement: MeasurementConfig,
     #[serde(default)]
     pub agents: AgentsConfig,
+    /// Present only when `orchestrator.backend = "deck"`: connection + build
+    /// settings for the bare-metal Steam Deck lane. The VM path ignores it.
+    #[serde(default)]
+    pub deck: Option<DeckConfig>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -26,6 +30,50 @@ pub struct OrchestratorConfig {
     /// grind burns its whole --max-cycles budget in seconds.
     #[serde(default = "default_failure_cooldown")]
     pub failure_cooldown_secs: u64,
+    /// Execution backend: "vm" (virtme-ng, default) or "deck" (bare-metal
+    /// Steam Deck via SSH). Selected once in `Orchestrator::new`.
+    #[serde(default = "default_backend")]
+    pub backend: String,
+}
+
+/// Bare-metal Steam Deck lane. The orchestrator cross-builds the neptune
+/// kernel on the workstation, deploys it to the Deck's slot B over SSH
+/// (deck-slot-b.sh), reboots into it, and drives the guest agent over TCP.
+#[derive(Debug, Clone, Deserialize)]
+pub struct DeckConfig {
+    /// Deck IP/hostname reachable over the LAN.
+    pub host: String,
+    #[serde(default = "default_deck_user")]
+    pub user: String,
+    /// Path to the passphrase-less SSH key for the Deck.
+    pub ssh_key: String,
+    /// Kernel source tree cross-built for the Deck (neptune). Distinct from
+    /// `vm.kernel_src` — the two lanes build different trees in parallel.
+    pub kernel_src: String,
+    /// taskset CPU list for the Deck cross-build (CCD0 in the two-lane split,
+    /// keeping it off the VM lane's cores). Empty = no pinning.
+    #[serde(default = "default_deck_build_cpus")]
+    pub build_cpus: String,
+    #[serde(default = "default_deck_jobs")]
+    pub build_jobs: u32,
+    /// Path to deck-slot-b.sh on the Deck (run via sudo).
+    #[serde(default = "default_deck_remote_script")]
+    pub remote_script: String,
+    /// Directory on the Deck where kernel artifacts are staged before install.
+    #[serde(default = "default_deck_deploy_dir")]
+    pub deploy_dir: String,
+    #[serde(default = "default_boot_timeout")]
+    pub boot_timeout_secs: u64,
+    /// TCP port the guest agent listens on (host connects here for RPC).
+    #[serde(default = "default_deck_agent_port")]
+    pub agent_port: u16,
+    /// grub/boot filename stem the install writes (matches efi grub.cfg).
+    #[serde(default = "default_deck_kernel_name")]
+    pub kernel_name: String,
+    /// Directory containing the guest agent + perfetto binaries on the Deck
+    /// (shared /home), used to (re)start the agent after each boot.
+    #[serde(default = "default_deck_agent_dir")]
+    pub agent_dir: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -190,12 +238,52 @@ impl CrucibleConfig {
                 VALID_GAME_BENCHMARKS.join(", ")
             );
         }
+        if self.orchestrator.backend == "deck" {
+            let deck = self.deck.as_ref().ok_or_else(|| {
+                anyhow::anyhow!("orchestrator.backend = \"deck\" requires a [deck] section")
+            })?;
+            if deck.host.trim().is_empty() || deck.ssh_key.trim().is_empty() {
+                anyhow::bail!("[deck] requires non-empty host and ssh_key");
+            }
+        } else if self.orchestrator.backend != "vm" {
+            anyhow::bail!(
+                "orchestrator.backend = {:?} is not supported (allowed: vm, deck)",
+                self.orchestrator.backend
+            );
+        }
         Ok(())
     }
 }
 
 fn default_cooldown() -> u64 {
     60
+}
+fn default_backend() -> String {
+    "vm".to_string()
+}
+fn default_deck_user() -> String {
+    "deck".to_string()
+}
+fn default_deck_build_cpus() -> String {
+    "0-7,16-23".to_string()
+}
+fn default_deck_jobs() -> u32 {
+    16
+}
+fn default_deck_remote_script() -> String {
+    "/home/deck/deck-slot-b.sh".to_string()
+}
+fn default_deck_deploy_dir() -> String {
+    "/home/deck/deck-deploy".to_string()
+}
+fn default_deck_agent_port() -> u16 {
+    5000
+}
+fn default_deck_kernel_name() -> String {
+    "linux-neptune-616".to_string()
+}
+fn default_deck_agent_dir() -> String {
+    "/home/deck/crucible-agent".to_string()
 }
 fn default_failure_cooldown() -> u64 {
     120
@@ -469,5 +557,66 @@ mod tests {
             vec!["kernel", "tuning"]
         );
         assert!(config.agents.game_player.enabled);
+    }
+
+    #[test]
+    fn parse_and_validate_deck_backend() {
+        let toml_str = r#"
+            [orchestrator]
+            db_path = "/x.db"
+            artifact_dir = "/art"
+            backend = "deck"
+
+            [vm]
+            kernel_src = "/k2"
+            guest_rootfs = "/rootfs"
+
+            [deck]
+            host = "192.168.86.80"
+            ssh_key = "/home/void/.ssh/crucible_deck_ed25519"
+            kernel_src = "/home/void/upstream/crucible_kernel_2"
+
+            [measurement]
+            mode = "game"
+            game_benchmark = "vkmark"
+        "#;
+        let config: CrucibleConfig = toml::from_str(toml_str).unwrap();
+        config.validate().unwrap();
+        assert_eq!(config.orchestrator.backend, "deck");
+        let deck = config.deck.as_ref().unwrap();
+        assert_eq!(deck.host, "192.168.86.80");
+        assert_eq!(deck.agent_port, 5000); // default
+        assert_eq!(deck.build_cpus, "0-7,16-23"); // default
+        assert_eq!(deck.kernel_name, "linux-neptune-616"); // default
+    }
+
+    #[test]
+    fn deck_backend_requires_deck_section() {
+        let toml_str = r#"
+            [orchestrator]
+            db_path = "/x.db"
+            artifact_dir = "/art"
+            backend = "deck"
+            [vm]
+            kernel_src = "/k"
+            guest_rootfs = "/r"
+        "#;
+        let config: CrucibleConfig = toml::from_str(toml_str).unwrap();
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn default_backend_is_vm() {
+        let toml_str = r#"
+            [orchestrator]
+            db_path = "/x.db"
+            artifact_dir = "/art"
+            [vm]
+            kernel_src = "/k"
+            guest_rootfs = "/r"
+        "#;
+        let config: CrucibleConfig = toml::from_str(toml_str).unwrap();
+        assert_eq!(config.orchestrator.backend, "vm");
+        config.validate().unwrap();
     }
 }

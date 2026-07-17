@@ -104,8 +104,18 @@ pub fn measurement_context(
         "game": game_name,
         "runs": config.measurement.runs_per_phase,
         "workload_kind": config.measurement.mode,
-        "vsock_cid": config.vm.vsock_cid,
     });
+    // Guest-RPC transport: the Deck lane threads a TCP host/port; the VM lane
+    // threads a vsock CID. `ClaudeAgentBase.execute` picks the transport from
+    // whichever key is present.
+    if config.orchestrator.backend == "deck" {
+        if let Some(deck) = &config.deck {
+            context["deck_host"] = serde_json::json!(deck.host);
+            context["deck_port"] = serde_json::json!(deck.agent_port);
+        }
+    } else {
+        context["vsock_cid"] = serde_json::json!(config.vm.vsock_cid);
+    }
     if config.measurement.mode == "game" {
         // benchmark_args are stress-ng knobs — leaking them here would put
         // `--cpu 2` on the vkmark command line. duration_secs is shared:
@@ -351,6 +361,11 @@ pub struct Orchestrator {
     /// Path to the most recently built kernel image. `None` until the first
     /// successful `KernelBuilder::build_kernel`.
     current_kernel: Option<PathBuf>,
+    /// Present iff `orchestrator.backend = "deck"`. When set, the machine
+    /// lifecycle (provision/reboot/apply/shutdown/sysctls) routes to the
+    /// bare-metal Steam Deck instead of the virtme-ng VM; the VM fields
+    /// above are left idle.
+    deck: Option<crate::deck::DeckBackend>,
 }
 
 impl Orchestrator {
@@ -361,6 +376,17 @@ impl Orchestrator {
             config.vm.vsock_cid,
             Duration::from_secs(config.vm.boot_timeout_secs),
         );
+        // Select the machine backend. "deck" requires the [deck] section;
+        // anything else (default "vm") leaves `deck` None and the VM path
+        // runs exactly as before.
+        let deck = if config.orchestrator.backend == "deck" {
+            config
+                .deck
+                .clone()
+                .map(crate::deck::DeckBackend::new)
+        } else {
+            None
+        };
         Self {
             config,
             db,
@@ -370,6 +396,7 @@ impl Orchestrator {
             vsock_client,
             state_machine: StateMachine::new(),
             current_kernel: None,
+            deck,
         }
     }
 
@@ -387,6 +414,9 @@ impl Orchestrator {
     /// Build a kernel image (if not already cached for this cycle) and boot
     /// the VM. No-op if the VM is already running with a usable kernel.
     pub async fn provision_vm(&mut self) -> Result<()> {
+        if let Some(deck) = &mut self.deck {
+            return deck.provision().await;
+        }
         let kernel_path = match &self.current_kernel {
             Some(p) => p.clone(),
             None => {
@@ -419,6 +449,9 @@ impl Orchestrator {
     /// shapes measure their comparison phase from an identical fresh-boot
     /// state.
     pub async fn reboot_same_kernel(&mut self) -> Result<()> {
+        if let Some(deck) = &mut self.deck {
+            return deck.reboot_same_kernel().await;
+        }
         let kernel = self
             .current_kernel
             .clone()
@@ -437,6 +470,9 @@ impl Orchestrator {
     /// the new image. Caller is responsible for persisting the patch row in
     /// the `patches` table separately.
     pub async fn apply_changes(&mut self, patch_path: &str) -> Result<()> {
+        if let Some(deck) = &mut self.deck {
+            return deck.apply_changes(patch_path).await;
+        }
         let new_kernel = self.kernel_builder.apply_and_build(patch_path).await?;
         self.vm_manager.shutdown().await?;
         self.current_kernel = Some(new_kernel.clone());
@@ -448,6 +484,59 @@ impl Orchestrator {
             .wait_for_ready(&self.vsock_client, timeout)
             .await?;
         Ok(())
+    }
+
+    /// Tear down the machine to a safe idle state between cycles/on error.
+    /// VM: kill QEMU. Deck: no-op (stays on slot B).
+    async fn backend_shutdown(&mut self) -> Result<()> {
+        if let Some(deck) = &mut self.deck {
+            return deck.shutdown().await;
+        }
+        self.vm_manager.shutdown().await
+    }
+
+    /// Revert the applied patch in the correct kernel tree. On the Deck path
+    /// this MUST use the Deck's tree, not `self.kernel_builder` (which points
+    /// at the VM's `vm.kernel_src`).
+    async fn backend_revert_patch(&self) -> Result<()> {
+        if let Some(deck) = &self.deck {
+            return deck.revert_patch().await;
+        }
+        self.kernel_builder.revert_patch().await
+    }
+
+    /// Kernel source tree the reasoning agents (Optimizer, PatchReviewer)
+    /// must read/edit/diff. On the Deck path this MUST be the Deck's tree —
+    /// the LLM's unified-diff context lines have to match the tree the patch
+    /// is later `git apply`'d against (`DeckBackend` uses `deck.kernel_src`).
+    /// Threading `vm.kernel_src` here silently makes every deck patch fail to
+    /// apply (different kernel version = mismatched context) → no-op A/A run.
+    fn agent_kernel_src(&self) -> &str {
+        match &self.config.deck {
+            Some(deck) if self.config.orchestrator.backend == "deck" => &deck.kernel_src,
+            _ => &self.config.vm.kernel_src,
+        }
+    }
+
+    /// Reset the per-cycle kernel cache so the next cycle rebuilds base.
+    fn backend_reset_cache(&mut self) {
+        self.current_kernel = None;
+        if let Some(deck) = &mut self.deck {
+            deck.reset_cache();
+        }
+    }
+
+    /// Apply sysctls in the running guest (best-effort). VM: vsock RPC.
+    /// Deck: SSH `sysctl -w` on slot B.
+    async fn backend_apply_sysctls(
+        &self,
+        sysctls: serde_json::Map<String, serde_json::Value>,
+    ) -> Result<serde_json::Value> {
+        if let Some(deck) = &self.deck {
+            return deck.apply_sysctls(sysctls).await;
+        }
+        let resp = self.vsock_client.apply_sysctls(sysctls).await?;
+        Ok(serde_json::to_value(resp).unwrap_or_default())
     }
 
     async fn run_agent(
@@ -735,7 +824,7 @@ impl Orchestrator {
                 "round": round,
                 "patch_diff": diff_text,
                 "bottleneck": analysis,
-                "kernel_src": self.config.vm.kernel_src,
+                "kernel_src": self.agent_kernel_src(),
                 "workload_mode": self.config.measurement.mode,
                 "workload_args": self.config.measurement.benchmark_args,
                 "gpu_stack": gpu_stack_description(&self.config),
@@ -770,7 +859,7 @@ impl Orchestrator {
                     // Hand the critiques back to the author for a revision
                     // (or a concession). finalize_patch reverts the tree, but
                     // make sure it is clean before the optimizer re-edits.
-                    if let Err(e) = self.kernel_builder.revert_patch().await {
+                    if let Err(e) = self.backend_revert_patch().await {
                         tracing::warn!(error = %e, "pre-revision revert failed; continuing");
                     }
                     let mut revise_ctx = optimize_context.clone();
@@ -998,7 +1087,7 @@ impl Orchestrator {
             // is still on disk — the kernel tree may be dirty. The
             // optimizer's finalize_patch tool relies on diffing against a
             // clean base, so reset the working tree before invoking it.
-            if let Err(e) = self.kernel_builder.revert_patch().await {
+            if let Err(e) = self.backend_revert_patch().await {
                 tracing::warn!(error = %e, "pre-optimizer revert_patch failed; continuing");
             }
 
@@ -1017,7 +1106,7 @@ impl Orchestrator {
                 "game_name": game_name,
                 "cycle_id": cycle_id,
                 "bottleneck": analysis,
-                "kernel_src": self.config.vm.kernel_src,
+                "kernel_src": self.agent_kernel_src(),
                 "attempt_number": attempt_number,
                 "allowed_layers": allowed,
                 "tuning_only": tuning_only,
@@ -1115,7 +1204,7 @@ impl Orchestrator {
                     .map(|(k, v)| format!("{k}={}", v.as_str().unwrap_or(&v.to_string())))
                     .collect::<Vec<_>>()
                     .join(",");
-                match self.vsock_client.apply_sysctls(sysctls).await {
+                match self.backend_apply_sysctls(sysctls).await {
                     Ok(resp) => {
                         tracing::info!(sysctls = %summary, response = ?resp, "sysctl tunings applied");
                         self.db.insert_patch(cycle_id, "tuning", &summary)?;
@@ -1186,17 +1275,17 @@ impl Orchestrator {
             // silently measured patch N instead of base (each verdict then
             // compares patch N+1 against patch N, not against base). The
             // diff itself persists in .crucible_patches/.
-            match self.kernel_builder.revert_patch().await {
+            match self.backend_revert_patch().await {
                 Ok(()) => tracing::info!(patch = p, verdict = %overall, "patch reverted at cycle end"),
                 Err(e) => {
                     tracing::warn!(patch = p, error = %e, "revert_patch failed at cycle end")
                 }
             }
-            if let Err(e) = self.vm_manager.shutdown().await {
-                tracing::warn!(error = %e, "VM shutdown failed at cycle end");
+            if let Err(e) = self.backend_shutdown().await {
+                tracing::warn!(error = %e, "backend shutdown failed at cycle end");
             }
             // Force a base-kernel rebuild + fresh boot on the next cycle.
-            self.current_kernel = None;
+            self.backend_reset_cache();
         }
         self.state_machine
             .transition(next)
@@ -1240,13 +1329,13 @@ impl Orchestrator {
                     // source is patched and the VM (if alive) runs the
                     // patched image. Scrub both so the next cycle's
                     // baseline is really the base kernel.
-                    if let Err(re) = self.kernel_builder.revert_patch().await {
+                    if let Err(re) = self.backend_revert_patch().await {
                         tracing::debug!(error = %re, "post-failure revert_patch (often nothing to revert)");
                     }
-                    if let Err(se) = self.vm_manager.shutdown().await {
-                        tracing::warn!(error = %se, "post-failure VM shutdown failed");
+                    if let Err(se) = self.backend_shutdown().await {
+                        tracing::warn!(error = %se, "post-failure backend shutdown failed");
                     }
-                    self.current_kernel = None;
+                    self.backend_reset_cache();
                     let backoff = self.config.orchestrator.failure_cooldown_secs;
                     if backoff > 0 {
                         tracing::warn!(
@@ -1275,8 +1364,8 @@ impl Orchestrator {
         // QEMU grandchild survives it and keeps the GPU's /dev/vfio group
         // open — observed leaking after a clean --single-cycle exit.
         // shutdown() kills and drains the whole process group.
-        if let Err(e) = self.vm_manager.shutdown().await {
-            tracing::warn!(error = %e, "final VM shutdown failed");
+        if let Err(e) = self.backend_shutdown().await {
+            tracing::warn!(error = %e, "final backend shutdown failed");
         }
         tracing::info!(total_cycles = cycles_completed, "orchestrator loop finished");
         Ok(())
