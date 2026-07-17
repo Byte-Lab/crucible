@@ -32,30 +32,10 @@ venv's python on PATH — the orchestrator spawns bare `python3`, and
 PATH="$PWD/.venv/bin:$PATH" CRUCIBLE_E2E=1 cargo test --test e2e -- --nocapture
 ```
 
-The GPU gate additionally requires (all runtime-only, reset by reboot):
-`testbed/virt/setup-host.sh <gpu-addr> --bind` run for the GPU (binds **every
-function of the slot** to vfio-pci and chowns the `/dev/vfio/<group>`
-nodes), a memlock limit ≥ guest RAM for the orchestrator process
-(`sudo prlimit --pid <pid> --memlock=unlimited`), and `~/.cache/virtme-ng`
-existing (QEMU dies instantly on the missing 9p fsdev dir if a cache
-cleaner removed it).
-
-Getting that pid safely: **never `pgrep -f crucible-orchestrator`** — the
-pattern matches the shell that runs the pgrep itself (the config path is on
-your own command line), so prlimit silently lands on the wrong process and
-QEMU later dies with `vfio_container_dma_map ... = -12 (Cannot allocate
-memory)`. Use the exact comm name (15-char truncated) and verify the effect
-on the target, not the prlimit exit status:
-
-```bash
-pid=$(pgrep -x crucible-orches | head -1)
-sudo prlimit --pid "$pid" --memlock=unlimited
-grep -i "max locked" /proc/$pid/limits   # must say unlimited
-```
-
-The permanent alternative (survives reboots, removes the race entirely) is a
-`/etc/security/limits.d/` entry raising memlock for the login user — see the
-note `testbed/virt/setup-host.sh` prints.
+The GPU gate additionally needs runtime-only host setup (VFIO bind of
+every GPU function, a memlock limit >= guest RAM on the orchestrator
+process, `~/.cache/virtme-ng` present) -- full checklist including the
+pgrep-comm gotcha in `skills/platform/virt/gpu-passthrough.md`.
 
 Build the guest rootfs images (mmdebstrap; both share `testbed/virt/lib/rootfs-common.sh`):
 
@@ -148,44 +128,45 @@ The full pipeline is wired:
 
 `VmManager::boot` spawns `vng` with the kernel-source path as cwd (virtme-ng 1.35 has no `--kernel`/`--boot` flags — it picks up `arch/x86/boot/bzImage` from cwd itself). The qemu device for vsock is appended via `--qemu-opts=` (the `=` form is required because argparse rejects bare values starting with `-`). `--exec` runs the guest agent directly instead of letting systemd start the unit, so the synthetic loop doesn't depend on cgroups or service ordering. When `[vm] guest_payload` is set, the host path is overlaid via `--rodir /opt/crucible/guest=…` so editing the agent doesn't require a rootfs rebuild. The child has `kill_on_drop(true)` to prevent leaked QEMUs from holding the vsock CID across panicking tests.
 
-Synthetic-loop path (`[measurement] mode = "synthetic"`, default): the profiler agent calls `run_benchmark('stress-ng', args, duration_secs)` via the guest RPC, parses ops/sec from `--metrics-brief`, and emits `fps_avg = fps_p1 = 0`, `frame_time_p99_ms = 1000 / ops_per_sec`, `psi_*_avg = psi_*_delta`. Game-mode path (`mode = "game"`): the profiler calls `launch_benchmark(name, args, mangohud_output)` — the guest runs an allow-listed native benchmark (`vkmark`/`glmark2`, per `[measurement] game_benchmark`) under MangoHud with `autostart_log=1` and renames the generated CSV to the deterministic `mangohud_output` path — then `fetch_mangohud_log(log_path)`, which pulls the CSV over vsock as base64 (`fetch_file` returns `contents_b64`/`truncated`, 8 MiB cap) and parses it with `parse_mangohud_csv` (nearest-rank percentiles, skips MangoHud's two system-info header rows). Non-zero `fps_avg` is the discriminator that real frames flowed. Requires the trixie game rootfs (`testbed/virt/setup-game-rootfs.sh`); without VFIO passthrough Mesa's lavapipe renders in software, which still exercises the full path. The game_selector is told `workload_kind` and pivots to `list_native_benchmarks` in game mode (no Steam library exists in the guest).
+Measurement modes (`[measurement] mode`, granular mechanics live in the
+platform skills -- they are the source of truth, not this file):
+- `"synthetic"` (default): profiler drives `stress-ng` via the guest
+  RPC on the bookworm bench rootfs. Details + the kernel-patch corpus
+  grind (the four loop fixes: workload-aware analyzer,
+  `explored_areas` diversity, zero-frame-time rejection, optimizer API
+  verification): `skills/platform/virt/synthetic-mode.md`.
+- `"game"`: vkmark/glmark2 under MangoHud on the passthrough GPU
+  (trixie game rootfs). Verified on real hardware; non-zero `fps_avg`
+  is the discriminator that real frames flowed. The hard-won
+  VFIO/MangoHud/process-group constraints are encoded in code and
+  cataloged in `skills/platform/virt/gpu-passthrough.md` -- read it
+  before touching `VmManager`/`KernelBuilder` boot paths or running a
+  GPU grind (it also covers the known robustness gaps: no
+  agent-failure backoff, QEMU leak on harness kill, `setsid` for long
+  grinds).
+- `"steam"`: a real Steam title launched headless in the VM. Launch
+  recipe, weston `--idle-time=0` presentation stack, Civ 6 benchmark
+  modes, rootfs seeding, and debug lessons:
+  `skills/platform/virt/steam-mode.md`.
 
-Steam-mode path (`mode = "steam"`, milestone G3): the profiler calls `launch_steam_benchmark(app_id, args, mangohud_output, duration_secs)` against the steam rootfs (`testbed/virt/setup-steam-rootfs.sh`). The guest handler DHCPs the slirp NIC (`_ensure_network` — Steam's CM logon needs a route out; `VmManager` appends the netdev unconditionally), raises `vm.max_map_count`/`overcommit_memory`, starts weston **as the steam user** (a root-owned Wayland socket/X-auth cookie segfaults the crucible-user client with "Unable to open display"), then does a **two-phase launch**: the first `steam.sh -silent` start MUST carry `-applaunch <id>` and the MangoHud env (the game inherits the *client's* env; a bare client that gets the launch only via a later IPC `-applaunch` never spawns the game), followed by a second IPC `-applaunch` as an update-restart retry. Client liveness is probed with `pgrep -x steam` polled until continuously up (`steam.sh` exits 0 once the client daemonizes — its exit code says nothing; the client also restarts itself once to self-update). Never invoke the Debian `/usr/games/steam` wrapper: it targets `~/.steam/debian-installation` and hangs on a zenity dialog headless. `[agents] timeout_secs = 1500` sizes the whole launch RPC (client settle 240s + Fossilize + asset load + log window); the steam e2e case boots 24G (pressure-vessel container build + game OOM 16G). The rootfs script seeds full-client login creds from `CRUCIBLE_STEAM_CLIENT_CREDS` (steamcmd's cached session alone cannot log the full client in) and documents the library-refresh recipe (the client refuses `-applaunch` on an update-required app, and the in-guest download dies in the ephemeral overlay).
+The Perfetto profiling stage (baseline-phase profiled repeat ->
+analyzer trace mining -> optimizer patch) closed the full loop live on
+real hardware; its capture constraints and known gaps (guest daemons,
+flush-on-stop, host-binary packaging, sysctl_changes not applied in
+guest): `skills/platform/virt/perfetto-loop.md`.
 
-Steam-mode presentation stack (2026-07-02, root-caused with Civ 6 app 289070): **weston MUST run with `--idle-time=0`** (in `WESTON_ARGV`). Weston's default 300s idle timeout blanks the input-less headless output and nothing ever wakes it: frame callbacks stop, Xwayland Present degrades to its 1 Hz fallback timer — Civ 6's menu "rendered" at exactly ~1000ms/frame on an idle GPU — and Vulkan WSI presents block forever (this, not a Dota-specific quirk, was the earlier "Dota stops presenting frames / gpu_load=0" symptom; Steam client settle alone eats 240s so every launch landed past the 300s deadline). With the compositor awake, Civ 6's menu on stock radeonsi runs ~40fps vsync'd / ~71fps uncapped / ~60fps with MangoHud `fps_limit=60` at 3-5% GPU. The remaining 40-vs-60 gap is GLX-under-Xwayland present pacing (~1.5 repaint ticks per vsync'd swap against weston's 60Hz headless output — `DEFAULT_OUTPUT_REPAINT_REFRESH`), so the launch env sets `vblank_mode=0`: benchmark numbers must not be capped/quantized by compositor pacing. The zink GL→RADV routing experiment was reverted (its "radeonsi presents no frames" premise was the idle-out bug; Mesa's default radeonsi is what real desktops run). Civ 6 ships three self-terminating benchmarks — `-benchmark graphicsbenchmark` (GPU flythrough, verified headless: renders, writes first-party per-frame CSV to `Logs/Benchmark-<ts>.csv` matching MangoHud, exits clean), `-benchmark xp2benchmark` (heavier GS scene), `-benchmark aibenchmark` (CPU-bound late-game AI turns — the right workload class for scheduler patches).
+Winner validation: a high-confidence patch (Welch-significant
+improvement, no regression) additionally runs the standard upstream
+regression benchmarks for the subsystem it touches -- mapping and
+protocol in `skills/validation/winner-validation.md`. Results go into
+the winner's `EVIDENCE.md` package, regressions included.
 
-Winner validation: a high-confidence patch (Welch-significant game improvement, no regression) additionally runs the standard upstream regression benchmarks for the subsystem it touches — mapping and protocol in `skills/validation/winner-validation.md` (scheduler: perf bench sched pipe/messaging, schbench, timed kernel compile, stress-ng --switch via `~/.cache/virtme-ng/schedbench.sh` on the bench rootfs). Results go into the winner's `EVIDENCE.md` package (`~/.crucible/civ6-winners/`), regressions included.
-
-Steam-mode debugging: the guest's rw overlay is ephemeral, so in-guest logs vanish at poweroff — write captures to `/run/virtme/cache/...` (the 9p mount of host `~/.cache/virtme-ng`, mounted automatically by vng) and harvest from the host after `poweroff -f`. The `~/.cache/virtme-ng/civ6*.sh` scripts are working examples of the pattern (boot with `--exec 'sh /run/virtme/cache/<script>.sh'`). Known gap: `game_selector`'s `list_steam_games` runs on the *host* before the VM boots, so it scans the host's Steam libraries, not the guest rootfs library the profiler actually launches from — in steam mode it can claim the configured `steam_app_id` "is not installed" while the launch succeeds anyway (observed 2026-07-02 with Civ 6). `BENCHMARK_GAMES` in `agents/game_selector/tools.py` also predates the verified Civ 6 modes. Point `list_steam_games` at the seeded rootfs library (`~/.crucible/steam-rootfs/home/crucible/.local/share/Steam/steamapps`) or add 289070 to `BENCHMARK_GAMES` before trusting selector output in steam mode.
-
-End-to-end status (2026-05-15): post Agent SDK migration, `cargo test --test e2e` with `CRUCIBLE_E2E=1` now runs the full **SelectGame → ProvisionVm → BaselineMeasurement → Analyze → GenerateOptimization → ApplyChanges → ComparisonMeasurement → Evaluate → (Accept | Reject)** pipeline live; a green run completes in ~280-330s on a cached kernel. `Reject` calls `KernelBuilder::revert_patch` on the final applied patch (orchestrator.rs maps `Verdict::Regressed → CycleState::Reject` and invokes the revert before transitioning to `Idle`). `Iterate` is now wired: `Verdict::Marginal` re-enters Analyze through the `Evaluate → Iterate → Analyze` path, bounded by `agents.optimizer.max_attempts_per_bottleneck` (default 3), with `previous_attempts` threaded into the Analyzer/Optimizer context. The hardware-gated test prints `e2e skipped` and passes when `CRUCIBLE_E2E` is unset.
-
-Game-mode status (2026-06-12): **verified on real hardware.** The 7900 XT passes through to the guest (RADV NAVI31), vkmark renders real frames, and MangoHud produces a parseable frame-time CSV. Hard-won constraints, all encoded in code — do not regress them:
-- The GPU is a **4-function device** (VGA/audio/USB/UCSI in separate IOMMU groups); QEMU's bus reset needs all of them on vfio-pci. `VmManager::vfio_sibling_functions` discovers them, `validate_passthrough` checks each, and `setup-host.sh` binds the whole slot.
-- `rombar=0` on the VGA function is mandatory — QEMU hangs forever reading the option ROM of a GPU the host previously drove.
-- The guest runs vkmark with `--winsys headless`: the default kms winsys presents via raw DRM atomic commits with no VkSwapchainKHR, so MangoHud's present hook records nothing.
-- MangoHud only flushes its CSV when logging stops *before* the app exits, and `no_display` starves the logger. The guest derives a finite `log_duration` from `LaunchBenchmark.duration_secs` (wire field, three-file rule) and keeps the HUD enabled.
-- `KernelBuilder` runs `make modules_install INSTALL_MOD_PATH=.virtme_mods` and `VmManager` overlays it via `--rodir` — vng with `--root` resolves modules only from inside the rootfs, and the test kernel needs `CONFIG_DRM_AMDGPU=m` for the guest to drive the card.
-- vng's QEMU grandchild survives `kill_on_drop` (`sh -c` chain); `VmManager` spawns into a process group and `shutdown` kills the group, otherwise a leaked QEMU holds vsock CID 3 across runs. **`shutdown` must also drain the group before returning** (`wait_for_process_group_exit` polls `kill(-pgid, 0)` until ESRCH + a 300ms settle): `child.wait()` reaps only the direct vng wrapper, but the QEMU grandchild dies asynchronously and keeps the GPU's `/dev/vfio/<group>` open. This is what lost GPU passthrough across a **kernel-patch reboot** — boot 2 raced the dying QEMU and hit `Could not open '/dev/vfio/14': Device or resource busy` → GPU never attached → guest never booted → downstream vsock ENODEV (misleading; the real error is only in the vng/QEMU console). `boot` now tees that console to `<kernel_src>/../crucible-vm-boot.log`. Verified: baseline 14k fps → amdgpu patch → rebuild → reboot → comparison 14k fps, 0 vfio-busy. **The game-mode kernel-patch loop (patch → rebuild → reboot → re-measure on the passthrough GPU) now works** — this was the last blocker.
-- The profiler prompt forbids fabricating metrics on tool failure (`{"error": …}` instead of zeros); zero `fps_avg` previously masked a complete VFIO failure as a successful cycle.
-
-Perfetto loop status (2026-07-01): **the full optimization loop closed live** on vkmark + the 7900 XT (`CRUCIBLE_E2E_GPU=1`, ~320s): clean baseline → Perfetto-profiled repeat → analyzer mines the trace → optimizer emits a compiling `kernel/sched/fair.c` patch → `KernelBuilder` applies + rebuilds → comparison → 5 metrics evaluated. How the profiling stage works — constraints are encoded, do not regress them:
-- The trace is captured in the **baseline** phase as a separate profiled repeat after the clean run (Analyze runs before ComparisonMeasurement, so a comparison-phase trace would arrive too late; the clean run stays unprofiled so tracing overhead can't skew reported numbers). `measurement_context` threads `capture_perfetto`/`perfetto_output`/`perfetto_host_dir` in game mode; the analyzer context gets `trace_paths` from the profiler's `collection_paths.traces`.
-- Guest capture: `_ensure_perfetto_daemons` spawns `traced` + `traced_probes` first (the `perfetto` CLI is only a consumer of the traced socket), logging to `/tmp/crucible_*.log` — never DEVNULL, a silent daemon death already cost a blind debugging cycle. The client rejects `-c -` together with `--time`, so the capture bound is a `duration_ms:` line prepended to the stdin config (`PERFETTO_KERNEL_CONFIG`: sched switch/wakeup/waking, cpu freq/idle, IRQ/softirq, compact_sched).
-- perfetto only writes the trace file when the capture **ends**: the profiler calls `stop_profiling` (guest TERMs the client with `pkill -x` and waits for exit = flush complete) before `fetch_perfetto_trace`, which itself retries on empty. Traces land in `config.orchestrator.artifact_dir`.
-- Debian trixie does not package perfetto — both rootfs scripts copy the **host Ubuntu binaries** (`perfetto`, `traced`, `traced_probes`, plus `libperfetto.so` + an `ld.so.conf.d` entry + `ldconfig`; the lib is what makes or breaks daemon startup). The analyzer's `run_trace_processor_query` uses the `perfetto` PyPI package (uv dependency) with `trace_processor_shell` as fallback.
-- Known gap: the optimizer's `sysctl_changes` output is **not applied in the guest**, so a knob-exposing patch alone is behavior-neutral and the comparison measures an unchanged kernel — wire sysctl application after ApplyChanges before trusting fps deltas. Single-run phases produce all-Neutral verdicts by design (Welch needs ≥2 samples/side).
-
-Kernel-patch corpus mode (2026-07-02): the loop generates real, profile-guided kernel **source** patches (not just sysctl knobs) — the primary user goal. Runs on the synthetic memory workload (`mode="synthetic"`, `stress-ng --vm --vm-method flip`, `vfio_device="none"`) so patch → build → **reboot** → re-measure cycles are clean (no GPU passthrough to lose; sidesteps the task-10 reboot bug). Config `~/.crucible/synth-grind.toml`, `allowed_layers=["kernel"]`, `runs_per_phase≥10`. Each cycle reverts its patch and starts from the base kernel; diffs persist in `linux/.crucible_patches/`. Four fixes made it work, do not regress:
-  - **Analyzer is workload-aware** (`workload_kind`/`workload_args` in its context). It used to treat synthetic stress-ng traces as failed *game* captures (no wine/proton threads) → empty bottleneck → optimizer no-op. For synthetic it's told the stress-ng + mm kernel threads (kcompactd/khugepaged/kswapd/rcu) ARE the signal and to name the kernel source area.
-  - **Cross-cycle diversity** via `explored_areas` (`db.list_all_patch_diffs` → basenames, threaded into analyzer+optimizer). Without it every cycle re-derived the same mm bottleneck and produced near-duplicate patches; with it the corpus spans khugepaged → kcompactd → page_alloc → RCU etc.
-  - **Zero-frame-time samples are rejected** in `persist_measurement`: an intermittent `stress-ng` run returning ops/sec=0 makes the profiler emit `frame_time_p99_ms=0.0`; one such 0 among ~0.0039 fabricated a spurious -10% delta at 33% CV. A valid run always has positive frame time.
-  - **Optimizer verifies APIs exist** before use (a well-reasoned `khugepaged mmap_write_trylock` patch failed to build — the fn wasn't visible in-tree). It's told to `search_kernel_source` for the definition/header first and fall back to APIs the file already uses.
-  - Reality: LLM patches are plausible, mostly compile, and are grounded in real trace numbers (e.g. a kcompactd nice-boost citing ">8x runnable-wait vs on-CPU"), but are **Neutral on the microbenchmark** — proving benefit needs a workload that stresses each patched path. The corpus + human triage is the deliverable; measurable-on-synthetic is a bonus. Build-failure auto-reverts (`KernelBuilder`) and the cycle continues.
-
-Game-mode kernel-patch corpus (2026-07-02, `~/.crucible/game-grind.toml`, vkmark + 7900 XT): ran **10 full E2E loops** (baseline → profiled re-run → analyze → kernel patch → rebuild → reboot → re-measure). 10 distinct patches across 8 subsystems (drm_atomic_helper, drm scheduler, CFS fair ×2, RCU ×2, workqueue, amdgpu IH, softirq, cpuidle); **0 vfio-busy across all 10 reboots** (the shutdown-drain fix held). **2 statistically-significant wins** (Welch p<0.05): `sched-fair-sis-util-idle-floor` (`select_idle_cpu`: probe up to 4 CPUs instead of `return -1` when `nr_idle_scan` reads the LLC as overloaded — improved fps_avg +6.5% / fps_p1 +19% / frame_time_p99 -15%) and `drm-sched-wq-highpri` (`WQ_HIGHPRI` on the DRM sched ordered wq — fps_p1 +58%). Caveats: single measurement run per phase + vkmark variance → accepts need **confirmation runs** (repeat N times) before trusting magnitudes; some patches regressed (the loop proposes, the data rejects). Diffs in `linux/.crucible_patches/`. **Gap for the gaming talk: workload is vkmark, not a shipping game** (Aspyr GL on RADV headless — see the game-mode caveats above and the plan doc).
-
-Orchestrator robustness gaps observed during the grind (not yet fixed): (1) **no backoff on agent failure** — when the Claude API hit a spend cap, GameSelector failed instantly and the loop burned all `--max-cycles` in seconds; a rate-limit/backoff branch would pause instead. (2) A **harness-killed orchestrator leaks its QEMU** (the process isn't reaped through `shutdown`), holding the GPU + vsock CID; manual cleanup (`pkill qemu` + `git checkout` the kernel tree) is needed. Launch long grinds with `setsid` so they survive the parent shell's process-group teardown.
+E2E status: with `CRUCIBLE_E2E=1` the full SelectGame -> ... ->
+Evaluate pipeline runs live (~280-330s on a cached kernel); the
+hardware-gated test prints `e2e skipped` and passes when unset. The
+first autonomous game-mode grind (10 cycles, 8 subsystems, 2
+since-killed wins) is recorded in
+`patches/evidence/vkmark-game-grind/RESULTS.md`.
 
 ### Agent dispatch protocol
 
@@ -286,5 +267,5 @@ from bare metal. null_blk: the q-level shared-tags atomic path needs
 - Guest-agent RPC is **length-prefixed JSON over vsock** (4-byte big-endian length, then payload), not newline-delimited. See `guest/crucible_guest_agent.py:_recv_message`. The host-side counterpart is `agents/common/guest_rpc.py::GuestRpc` (connect-per-call AF_VSOCK).
 - Claude-backed agents (anything subclassing `ClaudeAgentBase`) return `{"response": "<final assistant text>"}` in their `ResultEnvelope.result`. The orchestrator uses `parse_agent_response()` to unwrap that envelope, optionally strip ` ```json ` fences, and parse the inner JSON. Use it whenever consuming a Claude agent's structured output.
 - The minimal guest rootfs is built by `testbed/virt/setup-rootfs.sh` using `mmdebstrap --mode=root` (auto-elevates with sudo) into `~/.crucible/rootfs`. It installs `systemd-sysv`, `udev` (required for `/dev/virtio-ports/*` symlinks that virtme-init looks for), `python3`, `stress-ng`, `linux-perf`, `dbus`, `kmod`, and enables `crucible-guest-agent.service` plus a oneshot `crucible-cgroups.service`. No `python3-pydantic` — the guest agent uses stdlib only. The script fails fast if `mmdebstrap` is missing (no silent `debootstrap` fallback). On hosts without `debian-archive-keyring` (Ubuntu) the bootstrap runs with apt's insecure-repo options. Idempotent via the `.crucible-built` stamp file in the target.
-- The game rootfs is built by `testbed/virt/setup-game-rootfs.sh` into `~/.crucible/game-rootfs` on Debian **trixie** (bookworm's Mesa 22.x predates usable RDNA3 support; trixie ships Mesa 25.x) with `mesa-vulkan-drivers`, `vulkan-tools`, `vkmark`, `glmark2`, `glmark2-drm`, `mangohud`, and `firmware-amd-graphics` (non-free-firmware component). vkmark/glmark2 render via DRM/KMS directly — no compositor in the guest; vng already passes `-display none` to QEMU, so don't add another. Stamp file `.crucible-game-built`. All rootfs scripts share `testbed/virt/lib/rootfs-common.sh`.
-- The steam rootfs is built by `testbed/virt/setup-steam-rootfs.sh` into `~/.crucible/steam-rootfs` (trixie + i386 multiarch + steam-installer/steamcmd/weston/xwayland/dbus-x11/isc-dhcp-client). It extracts the Steam client bootstrap directly (never runs the Debian wrapper), creates `~/.steam/{steam,root}` symlinks, adds the `crucible` user to `video`+`render` (weston EGL dies without them), seeds the steamcmd session + game library + **full-client login creds** (`CRUCIBLE_STEAM_CLIENT_CREDS`, default the snap Steam dir — the client JWT lives in `local.vdf` + `config/loginusers.vdf`, which steamcmd never writes), and copies the host's perfetto binaries. Stamp `.crucible-steam-built`. The seeded library must be kept current with host steamcmd (recipe in the script header) — the client force-updates stale apps and the download dies in the ephemeral overlay.
+- The game rootfs is built by `testbed/virt/setup-game-rootfs.sh` into `~/.crucible/game-rootfs` (Debian trixie for Mesa 25.x/RDNA3). Package set, rationale, and constraints: `skills/platform/virt/gpu-passthrough.md`. Stamp `.crucible-game-built`. All rootfs scripts share `testbed/virt/lib/rootfs-common.sh`.
+- The steam rootfs is built by `testbed/virt/setup-steam-rootfs.sh` into `~/.crucible/steam-rootfs`. Build details, credential seeding (`CRUCIBLE_STEAM_CLIENT_CREDS`), and the library-refresh recipe: `skills/platform/virt/steam-mode.md`. Stamp `.crucible-steam-built`.

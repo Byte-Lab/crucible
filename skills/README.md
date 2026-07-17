@@ -17,11 +17,16 @@ skills/
     winner-validation.md
   platform/           where the workload runs
     virt/             virtme-ng VM lane (host 7950X + passthrough GPU)
-      gpu-passthrough.md
-      steam-mode.md
+      gpu-passthrough.md    VFIO/GPU constraints, host setup, game mode
+      synthetic-mode.md     stress-ng path + kernel-patch corpus grind
+      steam-mode.md         Steam-in-VM launch/presentation/rootfs
+      perfetto-loop.md      trace capture stage + known gaps
     deck/             Steam Deck bare-metal lane
       deck-lane.md
 ```
+
+The virt platform files are the SOURCE OF TRUTH for granular
+lane/mode constraints; CLAUDE.md only summarizes and points here.
 
 ## When to load what
 
@@ -40,8 +45,10 @@ By platform:
 
 | You are running on... | Load |
 |---|---|
-| The virt VM lane (vng, VFIO GPU, vkmark/glmark2) | platform/virt/gpu-passthrough.md |
+| The virt VM lane with GPU (mode = "game", VFIO, vkmark/glmark2) | platform/virt/gpu-passthrough.md |
+| The virt VM lane synthetic grind (mode = "synthetic", no GPU) | platform/virt/synthetic-mode.md |
 | Steam-in-VM mode (mode = "steam") | platform/virt/steam-mode.md (plus gpu-passthrough.md) |
+| Anything touching the Perfetto profiling stage | platform/virt/perfetto-loop.md |
 | The Steam Deck | platform/deck/deck-lane.md |
 
 Related material that lives elsewhere on purpose:
