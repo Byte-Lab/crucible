@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 """Tests for game-mode guest agent handlers: byte fetch_file + launch_benchmark."""
 
 import base64

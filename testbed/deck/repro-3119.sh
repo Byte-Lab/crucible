@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 # Attempt to reproduce scx#3119: runnable tasks not scheduled for ~20ms
 # despite idle CPUs. Reporter: Intel Cooperlake, ~90% util,
 # --performance --slice-min-us 5000 --slice-max-us 20000 --pinned-slice-us 5000.

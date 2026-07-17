@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 """Profiler game-mode tools: launch_benchmark + fetch_mangohud_log."""
 import base64
 from typing import Any

@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 # Reproduce + bisect scx#3303: hackbench 20s→32s between scx_lavd v1.0.19 → v1.0.20.
 # Reporter: dual-core Skylake, --performance. We emulate the small machine by
 # pinning the WORKLOAD to 2c/4t (0-1,16-17); the scheduler runs system-wide.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// Copyright (C) 2026 David Vernet
+
 use anyhow::{Context, Result};
 use crucible_common::protocol::{AgentName, ResultEnvelope, TaskEnvelope};
 use std::path::PathBuf;

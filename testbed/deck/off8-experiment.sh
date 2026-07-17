@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 # Real-8-CPU host experiment: offline CCD1 + siblings so the host becomes a
 # genuine 4c/8t machine (kills the "proxy inflates slice_max benefit"
 # objection). Re-enables CPUs on ANY exit.

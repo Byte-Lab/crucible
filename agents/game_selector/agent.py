@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 from agents.common.claude_agent import ClaudeAgentBase
 from agents.common.protocol import TaskEnvelope
 from agents.common.tool_registry import ToolRegistry

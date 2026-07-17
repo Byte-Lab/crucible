@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 """Adversarial kernel-patch reviewer.
 
 Sits between GenerateOptimization and ApplyChanges in the cycle: audits

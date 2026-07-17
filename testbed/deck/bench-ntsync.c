@@ -1,4 +1,5 @@
-// SPDX-License-Identifier: GPL-2.0
+// SPDX-License-Identifier: GPL-2.0-only
+// Copyright (C) 2026 David Vernet
 //
 // bench-ntsync.c - micro-benchmark for ntsync (drivers/misc/ntsync) mutex
 // lock-handoff latency under CPU contention.

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 """Game-mode profiler tools: drive native GPU benchmarks and pull MangoHud logs.
 
 Registered alongside the synthetic tools by ``make_profiler_tools``. The

@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 # Interleaved, thermally-controlled replication for cachenice vs stock EEVDF.
 # Alternating kernel blocks (stock, cache, stock, cache, stock, cache) so any
 # session drift (thermal/cache) is shared symmetrically across arms. Focus:

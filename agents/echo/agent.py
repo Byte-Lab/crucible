@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 from typing import Any
 
 from agents.common.agent_base import AgentBase

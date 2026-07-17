@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// Copyright (C) 2026 David Vernet
+
 //! End-to-end smoke tests for the synthetic and game-mode loops.
 //!
 //! Skipped by default. Set `CRUCIBLE_E2E=1` to run the synthetic loop, or

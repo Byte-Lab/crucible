@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 # Build a minimal Debian rootfs suitable for `vng --root`.
 #
 # The image carries just enough to run the Crucible guest agent and a

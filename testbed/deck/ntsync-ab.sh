@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 # ntsync boost A/B: stock scx_lavd vs ntsync-patched build.
 # Verifier/load test happens implicitly: patched scheduler must reach
 # "enabled" with the ntsync fexit hooks attached (module BTF present).

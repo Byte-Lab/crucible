@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 """Adversarial patch reviewer: prompt independence + read-only tooling."""
 from uuid import uuid4
 

@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 """Vsock client used by host-side agents to call the guest agent.
 
 The orchestrator passes a vsock CID into the agent via

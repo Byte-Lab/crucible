@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 # deck-slot-b.sh — runs ON the Steam Deck (as root via sudo). Manages the
 # slot-B test partition for the Crucible bare-metal lane. Slot A is the
 # pristine recovery anchor and is NEVER touched here.

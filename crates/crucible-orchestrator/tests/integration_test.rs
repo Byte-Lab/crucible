@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// Copyright (C) 2026 David Vernet
+
 use std::io::Write;
 use std::path::PathBuf;
 

@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 # Build the GPU-native benchmark rootfs for `vng --root`.
 #
 # Extends the minimal synthetic rootfs (testbed/virt/setup-rootfs.sh) with

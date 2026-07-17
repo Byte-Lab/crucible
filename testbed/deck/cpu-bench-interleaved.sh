@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 # Interleaved CPU-scheduler benchmark on the Deck: stock EEVDF vs a test
 # kernel (deployed as crucible-test). Alternating blocks kill thermal drift.
 # Metrics come from schbench (wakeup + request latency) and a timed

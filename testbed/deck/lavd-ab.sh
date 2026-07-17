@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 # Host-side A/B harness for scx_lavd variants (Steam Deck proxy).
 #
 # Proxy model: Deck = 4c/8t single-LLC Van Gogh. Host = 7950X; we pin the

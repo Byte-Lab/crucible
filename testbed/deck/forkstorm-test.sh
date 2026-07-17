@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 # Validate a8a25fcb's stated scenario: latency-critical task wake latency
 # while a fork storm runs. Compares scheduler variants.
 # Usage: forkstorm-test.sh <label> <scx_lavd-binary>

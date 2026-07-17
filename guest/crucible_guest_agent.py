@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 # guest/crucible_guest_agent.py
 """Crucible guest agent -- vsock RPC daemon running inside the VM."""
 

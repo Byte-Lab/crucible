@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 # Host-side VFIO passthrough preparation for Crucible game mode.
 #
 # Default mode is read-only: prechecks IOMMU, inspects the target GPU's

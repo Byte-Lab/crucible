@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 from agents.game_selector.tools import make_game_selector_tools
 from agents.common.tool_registry import ToolRegistry
 

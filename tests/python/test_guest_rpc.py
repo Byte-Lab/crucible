@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 """Tests for the host-side vsock client used by Claude agents.
 
 We mock the socket because AF_VSOCK is only available inside a VM-aware

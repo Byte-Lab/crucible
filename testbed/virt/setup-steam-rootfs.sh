@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 # Build the Steam game-measurement rootfs for `vng --root` (milestone G3).
 #
 # Extends the GPU benchmark rootfs (testbed/virt/setup-game-rootfs.sh) with the

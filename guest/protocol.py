@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 # guest/protocol.py
 #
 # Stdlib-only on purpose. The Debian bookworm rootfs ships pydantic v1,

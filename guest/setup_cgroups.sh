@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 set -euo pipefail
 CGROUP_ROOT="/sys/fs/cgroup/crucible"
 mkdir -p "$CGROUP_ROOT/game"

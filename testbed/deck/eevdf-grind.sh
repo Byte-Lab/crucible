@@ -1,4 +1,7 @@
 #!/bin/bash
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 # Unattended EEVDF kernel-patch grind on the Steam Deck via the v3 one-shot
 # mechanism. For each patch: build neptune kernel -> deploy as crucible-test
 # -> one-shot boot -> verify -> Civ6 gfx+AI benchmark arms -> reboot to stock.

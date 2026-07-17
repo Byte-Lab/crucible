@@ -1,3 +1,6 @@
+# SPDX-License-Identifier: GPL-2.0-only
+# Copyright (C) 2026 David Vernet
+
 # testbed/virt/lib/rootfs-common.sh
 #
 # Shared helpers for the rootfs build scripts (setup-rootfs.sh and

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
+// Copyright (C) 2026 David Vernet
+
 //! Bare-metal Steam Deck execution backend.
 //!
 //! Mirrors the role `VmManager` + `KernelBuilder` play for the virtme-ng
