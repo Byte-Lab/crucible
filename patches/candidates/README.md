@@ -62,7 +62,10 @@ scorecards are the durable record. Perfetto traces that pointed at a
 specific patch are co-located in that patch's directory (e.g.
 amd-pstate-epp-boost/traces/baseline-gfx.pftrace is the dynamic_epp
 root-cause trace); traces from investigations that produced no patch
-stay in ../evidence/traces/.
+stay in ../evidence/traces/. Traces are deliberately UNTRACKED
+(.gitignore: *.pftrace) - they exist only on the machine that captured
+them; everything derived from them (findings docs, numbers) is
+committed.
 
 ## What is NOT here
 
