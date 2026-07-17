@@ -38,22 +38,16 @@ effect_size_threshold = 0.5
 max_stddev_pct = 10
 
 [agents]
-model = "claude-sonnet-5"
+model = "claude-fable-5"
 max_retries = 3
 # Steam mode's launch_steam_benchmark RPC blocks for client settle (240s) +
 # Fossilize shader pre-processing + asset load + the MangoHud log window —
 # ~1000s worst case. The GuestRpc socket timeout is derived from this value.
 timeout_secs = 1500
-# Per-call Anthropic `max_tokens` cap. Per-agent overrides below win when set.
-# Sized to keep a full cycle (5 calls) inside the org's 30k input-tokens/min cap.
-max_tokens = 4096
-
-[agents.per_agent_max_tokens]
-game_selector = 1024
-profiler      = 2048
-analyzer      = 4096
-optimizer     = 6144
-echo          = 512
+# Per-call `max_tokens` cap (advisory under the Agent SDK -- see CLAUDE.md).
+# Set to the model's max output (Fable 5: 128k). Per-agent overrides via
+# [agents.per_agent_max_tokens] win when set; none are set by default.
+max_tokens = 128000
 
 [agents.optimizer]
 max_attempts_per_bottleneck = 3

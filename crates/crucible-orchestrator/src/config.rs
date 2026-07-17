@@ -176,9 +176,9 @@ pub struct AgentsConfig {
     pub max_retries: u32,
     #[serde(default = "default_timeout")]
     pub timeout_secs: u64,
-    /// Global per-call cap on Anthropic `max_tokens`. Per-agent overrides
-    /// in `per_agent_max_tokens` win when present. Tuned to keep multi-agent
-    /// cycles inside the org rate cap (30k input tokens/min as of 2026-05).
+    /// Global per-call `max_tokens`. Per-agent overrides in
+    /// `per_agent_max_tokens` win when present. Advisory under the Agent
+    /// SDK (no per-call output cap); default is the model's max output.
     #[serde(default = "default_max_tokens")]
     pub max_tokens: u32,
     /// Optional per-agent overrides keyed by the snake_case `AgentName`
@@ -334,7 +334,7 @@ fn default_steam_app_id() -> u32 {
     570
 }
 fn default_model() -> String {
-    "claude-sonnet-5".to_string()
+    "claude-fable-5".to_string()
 }
 fn default_max_retries() -> u32 {
     3
@@ -345,7 +345,9 @@ fn default_timeout() -> u64 {
     1500
 }
 fn default_max_tokens() -> u32 {
-    4096
+    // Fable 5 max output. Advisory only under the Agent SDK (no per-call
+    // output cap) -- kept on the wire for protocol compatibility.
+    128_000
 }
 fn default_review_rounds() -> u32 {
     8
@@ -433,7 +435,7 @@ mod tests {
         assert_eq!(config.measurement.mode, "synthetic"); // default
         assert_eq!(config.measurement.benchmark_args, vec!["--cpu", "2"]); // default
         assert_eq!(config.measurement.benchmark_duration_secs, 30); // default
-        assert_eq!(config.agents.model, "claude-sonnet-5"); // default
+        assert_eq!(config.agents.model, "claude-fable-5"); // default
     }
 
     #[test]
