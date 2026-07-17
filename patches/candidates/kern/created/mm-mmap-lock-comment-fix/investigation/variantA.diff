@@ -1,0 +1,96 @@
+diff --git a/include/linux/mm_types.h b/include/linux/mm_types.h
+index b18c2b2e7d2c..b75b611c29fc 100644
+--- a/include/linux/mm_types.h
++++ b/include/linux/mm_types.h
+@@ -1207,11 +1207,6 @@ struct mm_struct {
+ 		 */
+ 		atomic_t mm_users;
+ 
+-		/* MM CID related storage */
+-		struct mm_mm_cid mm_cid;
+-
+-		/* sched_cache related statistics */
+-		struct sched_cache_stat sc_stat;
+ #ifdef CONFIG_MMU
+ 		atomic_long_t pgtables_bytes;	/* size of all page tables */
+ #endif
+@@ -1220,25 +1215,51 @@ struct mm_struct {
+ 		spinlock_t page_table_lock; /* Protects page tables and some
+ 					     * counters
+ 					     */
++		struct list_head mmlist; /* List of maybe swapped mm's.	These
++					  * are globally strung together off
++					  * init_mm.mmlist, and are protected
++					  * by mmlist_lock
++					  */
++
++		/* MM CID related storage */
++		struct mm_mm_cid mm_cid;
++
++		/* sched_cache related statistics */
++		struct sched_cache_stat sc_stat;
++
+ 		/*
+-		 * Typically the current mmap_lock's offset is 56 bytes from
+-		 * the last cacheline boundary, which is very optimal, as
+-		 * its two hot fields 'count' and 'owner' sit in 2 different
++		 * On 64-bit, the seven VM counters below occupy 56 bytes,
++		 * which places mmap_lock at offset 56 from a cacheline
++		 * boundary. That layout is very optimal, as mmap_lock's two
++		 * hot fields 'count' and 'owner' then sit in 2 different
+ 		 * cachelines, and when mmap_lock is highly contended, both
+-		 * of the 2 fields will be accessed frequently, current layout
+-		 * will help to reduce cache bouncing.
++		 * of the 2 fields will be accessed frequently, and the
++		 * current layout will help to reduce cache bouncing.
+ 		 *
+-		 * So please be careful with adding new fields before
+-		 * mmap_lock, which can easily push the 2 fields into one
+-		 * cacheline.
++		 * The alignment anchor on hiwater_rss makes the offset
++		 * independent of the config-dependent fields above, and the
++		 * VM counters are a deliberate choice of neighbours for
++		 * 'count': they are only written under mmap_lock write or
++		 * from low-rate paths (reclaim's update_hiwater_rss(),
++		 * pin/unpin accounting on pinned_vm), so the 'count'
++		 * cacheline is not shared with anything that other CPUs
++		 * access at high frequency.
++		 *
++		 * So please be careful with adding new fields between the
++		 * anchor and mmap_lock, which can easily push 'count' and
++		 * 'owner' into one cacheline.
+ 		 */
++		unsigned long hiwater_rss ____cacheline_aligned_in_smp;
++					   /* High-watermark of RSS usage */
++		unsigned long hiwater_vm;  /* High-water virtual memory usage */
++
++		unsigned long total_vm;	   /* Total pages mapped */
++		unsigned long locked_vm;   /* Pages that have PG_mlocked set */
++		atomic64_t    pinned_vm;   /* Refcount permanently increased */
++		unsigned long data_vm;	   /* VM_WRITE & ~VM_SHARED & ~VM_STACK */
++		unsigned long exec_vm;	   /* VM_EXEC & ~VM_WRITE & ~VM_STACK */
+ 		struct rw_semaphore mmap_lock;
+ 
+-		struct list_head mmlist; /* List of maybe swapped mm's.	These
+-					  * are globally strung together off
+-					  * init_mm.mmlist, and are protected
+-					  * by mmlist_lock
+-					  */
+ #ifdef CONFIG_PER_VMA_LOCK
+ 		struct rcuwait vma_writer_wait;
+ 		/*
+@@ -1262,14 +1283,6 @@ struct mm_struct {
+ #endif
+ 		struct futex_mm_data	futex;
+ 
+-		unsigned long hiwater_rss; /* High-watermark of RSS usage */
+-		unsigned long hiwater_vm;  /* High-water virtual memory usage */
+-
+-		unsigned long total_vm;	   /* Total pages mapped */
+-		unsigned long locked_vm;   /* Pages that have PG_mlocked set */
+-		atomic64_t    pinned_vm;   /* Refcount permanently increased */
+-		unsigned long data_vm;	   /* VM_WRITE & ~VM_SHARED & ~VM_STACK */
+-		unsigned long exec_vm;	   /* VM_EXEC & ~VM_WRITE & ~VM_STACK */
+ 		unsigned long stack_vm;	   /* VM_STACK */
+ 		union {
+ 			/* Temporary while VMA flags are being converted. */

@@ -1,0 +1,145 @@
+=== pair=1 side=stock 11:58:23 ===
+pair=1 side=stock WIS-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=1 side=stock WIS-RESULT bench=mmap1_threads rep=1 avg=250916
+pair=1 side=stock WIS-RESULT bench=mmap1_threads rep=2 avg=252997
+pair=1 side=stock WIS-RESULT bench=mmap1_threads rep=3 avg=252640
+pair=1 side=stock WIS-RESULT bench=page_fault1_threads rep=1 avg=4779158
+pair=1 side=stock WIS-RESULT bench=page_fault1_threads rep=2 avg=4680768
+pair=1 side=stock WIS-RESULT bench=page_fault1_threads rep=3 avg=4596618
+pair=1 side=stock WIS-DONE
+=== pair=1 side=patched 11:59:34 ===
+pair=1 side=patched WIS-KERNEL: 7.2.0-rc3+ 2416113f
+pair=1 side=patched WIS-RESULT bench=mmap1_threads rep=1 avg=242561
+pair=1 side=patched WIS-RESULT bench=mmap1_threads rep=2 avg=235935
+pair=1 side=patched WIS-RESULT bench=mmap1_threads rep=3 avg=235975
+pair=1 side=patched WIS-RESULT bench=page_fault1_threads rep=1 avg=4657785
+pair=1 side=patched WIS-RESULT bench=page_fault1_threads rep=2 avg=4615922
+pair=1 side=patched WIS-RESULT bench=page_fault1_threads rep=3 avg=4637560
+pair=1 side=patched WIS-DONE
+=== pair=2 side=stock 12:00:45 ===
+pair=2 side=stock WIS-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=2 side=stock WIS-RESULT bench=mmap1_threads rep=1 avg=244250
+pair=2 side=stock WIS-RESULT bench=mmap1_threads rep=2 avg=243226
+pair=2 side=stock WIS-RESULT bench=mmap1_threads rep=3 avg=246415
+pair=2 side=stock WIS-RESULT bench=page_fault1_threads rep=1 avg=4696754
+pair=2 side=stock WIS-RESULT bench=page_fault1_threads rep=2 avg=4564914
+pair=2 side=stock WIS-RESULT bench=page_fault1_threads rep=3 avg=4664070
+pair=2 side=stock WIS-DONE
+=== pair=2 side=patched 12:01:56 ===
+pair=2 side=patched WIS-KERNEL: 7.2.0-rc3+ 2416113f
+pair=2 side=patched WIS-RESULT bench=mmap1_threads rep=1 avg=238516
+pair=2 side=patched WIS-RESULT bench=mmap1_threads rep=2 avg=237874
+pair=2 side=patched WIS-RESULT bench=mmap1_threads rep=3 avg=233656
+pair=2 side=patched WIS-RESULT bench=page_fault1_threads rep=1 avg=4734621
+pair=2 side=patched WIS-RESULT bench=page_fault1_threads rep=2 avg=4648402
+pair=2 side=patched WIS-RESULT bench=page_fault1_threads rep=3 avg=4611533
+pair=2 side=patched WIS-DONE
+=== pair=3 side=stock 12:03:07 ===
+pair=3 side=stock WIS-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=3 side=stock WIS-RESULT bench=mmap1_threads rep=1 avg=257209
+pair=3 side=stock WIS-RESULT bench=mmap1_threads rep=2 avg=264183
+pair=3 side=stock WIS-RESULT bench=mmap1_threads rep=3 avg=237431
+pair=3 side=stock WIS-RESULT bench=page_fault1_threads rep=1 avg=4726481
+pair=3 side=stock WIS-RESULT bench=page_fault1_threads rep=2 avg=4736811
+pair=3 side=stock WIS-RESULT bench=page_fault1_threads rep=3 avg=4601416
+pair=3 side=stock WIS-DONE
+=== pair=3 side=patched 12:04:18 ===
+pair=3 side=patched WIS-KERNEL: 7.2.0-rc3+ 2416113f
+pair=3 side=patched WIS-RESULT bench=mmap1_threads rep=1 avg=260315
+pair=3 side=patched WIS-RESULT bench=mmap1_threads rep=2 avg=234403
+pair=3 side=patched WIS-RESULT bench=mmap1_threads rep=3 avg=237873
+pair=3 side=patched WIS-RESULT bench=page_fault1_threads rep=1 avg=4696441
+pair=3 side=patched WIS-RESULT bench=page_fault1_threads rep=2 avg=4589504
+pair=3 side=patched WIS-RESULT bench=page_fault1_threads rep=3 avg=4648456
+pair=3 side=patched WIS-DONE
+=== pair=4 side=stock 12:05:29 ===
+pair=4 side=stock WIS-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=4 side=stock WIS-RESULT bench=mmap1_threads rep=1 avg=241896
+pair=4 side=stock WIS-RESULT bench=mmap1_threads rep=2 avg=236860
+pair=4 side=stock WIS-RESULT bench=mmap1_threads rep=3 avg=257572
+pair=4 side=stock WIS-RESULT bench=page_fault1_threads rep=1 avg=4682813
+pair=4 side=stock WIS-RESULT bench=page_fault1_threads rep=2 avg=4644539
+pair=4 side=stock WIS-RESULT bench=page_fault1_threads rep=3 avg=4548187
+pair=4 side=stock WIS-DONE
+=== pair=4 side=patched 12:06:40 ===
+pair=4 side=patched WIS-KERNEL: 7.2.0-rc3+ 2416113f
+pair=4 side=patched WIS-RESULT bench=mmap1_threads rep=1 avg=232277
+pair=4 side=patched WIS-RESULT bench=mmap1_threads rep=2 avg=235233
+pair=4 side=patched WIS-RESULT bench=mmap1_threads rep=3 avg=252184
+pair=4 side=patched WIS-RESULT bench=page_fault1_threads rep=1 avg=4727382
+pair=4 side=patched WIS-RESULT bench=page_fault1_threads rep=2 avg=4624069
+pair=4 side=patched WIS-RESULT bench=page_fault1_threads rep=3 avg=4669390
+pair=4 side=patched WIS-DONE
+=== pair=5 side=stock 12:07:50 ===
+pair=5 side=stock WIS-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=5 side=stock WIS-RESULT bench=mmap1_threads rep=1 avg=243006
+pair=5 side=stock WIS-RESULT bench=mmap1_threads rep=2 avg=245690
+pair=5 side=stock WIS-RESULT bench=mmap1_threads rep=3 avg=238130
+pair=5 side=stock WIS-RESULT bench=page_fault1_threads rep=1 avg=4689083
+pair=5 side=stock WIS-RESULT bench=page_fault1_threads rep=2 avg=4583674
+pair=5 side=stock WIS-RESULT bench=page_fault1_threads rep=3 avg=4639580
+pair=5 side=stock WIS-DONE
+=== pair=5 side=patched 12:09:01 ===
+pair=5 side=patched WIS-KERNEL: 7.2.0-rc3+ 2416113f
+pair=5 side=patched WIS-RESULT bench=mmap1_threads rep=1 avg=236112
+pair=5 side=patched WIS-RESULT bench=mmap1_threads rep=2 avg=237869
+pair=5 side=patched WIS-RESULT bench=mmap1_threads rep=3 avg=230293
+pair=5 side=patched WIS-RESULT bench=page_fault1_threads rep=1 avg=4651013
+pair=5 side=patched WIS-RESULT bench=page_fault1_threads rep=2 avg=4614994
+pair=5 side=patched WIS-RESULT bench=page_fault1_threads rep=3 avg=4600623
+pair=5 side=patched WIS-DONE
+=== pair=6 side=stock 12:10:12 ===
+pair=6 side=stock WIS-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=6 side=stock WIS-RESULT bench=mmap1_threads rep=1 avg=238511
+pair=6 side=stock WIS-RESULT bench=mmap1_threads rep=2 avg=239088
+pair=6 side=stock WIS-RESULT bench=mmap1_threads rep=3 avg=238527
+pair=6 side=stock WIS-RESULT bench=page_fault1_threads rep=1 avg=4733758
+pair=6 side=stock WIS-RESULT bench=page_fault1_threads rep=2 avg=4628149
+pair=6 side=stock WIS-RESULT bench=page_fault1_threads rep=3 avg=4617457
+pair=6 side=stock WIS-DONE
+=== pair=6 side=patched 12:11:23 ===
+pair=6 side=patched WIS-KERNEL: 7.2.0-rc3+ 2416113f
+pair=6 side=patched WIS-RESULT bench=mmap1_threads rep=1 avg=234989
+pair=6 side=patched WIS-RESULT bench=mmap1_threads rep=2 avg=231245
+pair=6 side=patched WIS-RESULT bench=mmap1_threads rep=3 avg=238349
+pair=6 side=patched WIS-RESULT bench=page_fault1_threads rep=1 avg=4638218
+pair=6 side=patched WIS-RESULT bench=page_fault1_threads rep=2 avg=4589731
+pair=6 side=patched WIS-RESULT bench=page_fault1_threads rep=3 avg=4633324
+pair=6 side=patched WIS-DONE
+=== pair=7 side=stock 12:12:34 ===
+pair=7 side=stock WIS-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=7 side=stock WIS-RESULT bench=mmap1_threads rep=1 avg=242754
+pair=7 side=stock WIS-RESULT bench=mmap1_threads rep=2 avg=236271
+pair=7 side=stock WIS-RESULT bench=mmap1_threads rep=3 avg=232208
+pair=7 side=stock WIS-RESULT bench=page_fault1_threads rep=1 avg=4734864
+pair=7 side=stock WIS-RESULT bench=page_fault1_threads rep=2 avg=4708083
+pair=7 side=stock WIS-RESULT bench=page_fault1_threads rep=3 avg=4653334
+pair=7 side=stock WIS-DONE
+=== pair=7 side=patched 12:13:45 ===
+pair=7 side=patched WIS-KERNEL: 7.2.0-rc3+ 2416113f
+pair=7 side=patched WIS-RESULT bench=mmap1_threads rep=1 avg=232005
+pair=7 side=patched WIS-RESULT bench=mmap1_threads rep=2 avg=233943
+pair=7 side=patched WIS-RESULT bench=mmap1_threads rep=3 avg=231006
+pair=7 side=patched WIS-RESULT bench=page_fault1_threads rep=1 avg=4647740
+pair=7 side=patched WIS-RESULT bench=page_fault1_threads rep=2 avg=4694257
+pair=7 side=patched WIS-RESULT bench=page_fault1_threads rep=3 avg=4652191
+pair=7 side=patched WIS-DONE
+=== pair=8 side=stock 12:14:56 ===
+pair=8 side=stock WIS-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=8 side=stock WIS-RESULT bench=mmap1_threads rep=1 avg=243260
+pair=8 side=stock WIS-RESULT bench=mmap1_threads rep=2 avg=240794
+pair=8 side=stock WIS-RESULT bench=mmap1_threads rep=3 avg=243315
+pair=8 side=stock WIS-RESULT bench=page_fault1_threads rep=1 avg=4689598
+pair=8 side=stock WIS-RESULT bench=page_fault1_threads rep=2 avg=4603684
+pair=8 side=stock WIS-RESULT bench=page_fault1_threads rep=3 avg=4644616
+pair=8 side=stock WIS-DONE
+=== pair=8 side=patched 12:16:07 ===
+pair=8 side=patched WIS-KERNEL: 7.2.0-rc3+ 2416113f
+pair=8 side=patched WIS-RESULT bench=mmap1_threads rep=1 avg=239034
+pair=8 side=patched WIS-RESULT bench=mmap1_threads rep=2 avg=234238
+pair=8 side=patched WIS-RESULT bench=mmap1_threads rep=3 avg=232781
+pair=8 side=patched WIS-RESULT bench=page_fault1_threads rep=1 avg=4715948
+pair=8 side=patched WIS-RESULT bench=page_fault1_threads rep=2 avg=4659002
+pair=8 side=patched WIS-RESULT bench=page_fault1_threads rep=3 avg=4690917
+pair=8 side=patched WIS-DONE
+ALL-DONE

@@ -1,0 +1,337 @@
+diff --git a/drivers/cpufreq/amd-pstate.c b/drivers/cpufreq/amd-pstate.c
+index b2cf783b7895..b5dbd5859232 100644
+--- a/drivers/cpufreq/amd-pstate.c
++++ b/drivers/cpufreq/amd-pstate.c
+@@ -38,6 +38,9 @@
+ #include <linux/uaccess.h>
+ #include <linux/static_call.h>
+ #include <linux/topology.h>
++#include <linux/debugfs.h>
++#include <linux/seq_file.h>
++#include <linux/percpu.h>
+ 
+ #include <acpi/processor.h>
+ #include <acpi/cppc_acpi.h>
+@@ -1447,6 +1450,232 @@ static bool amd_pstate_acpi_pm_profile_undefined(void)
+ 	return false;
+ }
+ 
++/*
++ * Busy min_perf floor for the active (EPP) mode.
++ *
++ * In active mode the platform autonomously picks the operating point
++ * between min_perf and max_perf, biased by the EPP hint; the kernel only
++ * rewrites the CPPC request on policy/limit changes.  Workloads dominated
++ * by one mostly-busy thread that takes frequent short sleeps (e.g. a game
++ * render thread blocking on a futex waiting for the GPU or a worker
++ * thread every frame) defeat the platform's utilization tracking: each
++ * sleep decays the hardware's performance signal, so post-wakeup bursts
++ * start at a low operating point and the frame-time *tail* inflates even
++ * though the CPU is ~100% busy at the frame timescale.
++ *
++ * When the busy_floor module parameter is enabled, track per-CPU C0
++ * residency (delta MPERF / delta TSC) from a cpufreq update-util hook,
++ * sampled at most every AMD_PSTATE_BUSY_FLOOR_SAMPLE_NS.  While a CPU has
++ * been >= AMD_PSTATE_BUSY_FLOOR_BUSY_PCT busy within the last
++ * AMD_PSTATE_BUSY_FLOOR_DECAY_NS, its min_perf is raised to nominal_perf
++ * (clamped to the policy limits) so that a brief sleep cannot collapse
++ * the operating point below the sustained-performance level.  The floor
++ * self-limits: a genuinely idle or lightly loaded CPU stops refreshing
++ * the busy timestamp and the floor decays back to min_limit_perf.
++ *
++ * This mirrors intel_pstate's hwp_boost, which raises the HWP min from an
++ * update-util hook in autonomous mode.  hwp_boost keys off
++ * SCHED_CPUFREQ_IOWAIT, which futex/GPU-fence waits never set, so a
++ * residency trigger is used here instead.
++ *
++ * The floor is applied on top of cppc_req_cached and never written back
++ * to it: all other active-mode writers of MSR_AMD_CPPC_REQ (limit updates
++ * via msr_update_perf(), EPP stores via msr_set_epp()) keep working purely
++ * from the cached "policy" value.  This variant is purely edge-triggered:
++ * the floor is written exactly once when a busy period starts and restored
++ * exactly once when it ends, with no per-sample clobber-heal.  A concurrent
++ * limit/EPP update therefore drops the floor until the next activation
++ * edge, which is acceptable because those updates do not occur during
++ * steady gaming; in return the write rate matches EPP=performance's.
++ *
++ * The floor breaks the "MSR == cppc_req_cached" invariant while active, so
++ * the msr_update_perf() value==prev dedup would otherwise be able to skip
++ * a suspend/offline bios_min_perf reset while the MSR still holds the
++ * floor.  amd_pstate_busy_floor_clear() restores the invariant (and is
++ * called before those resets) to keep the dedup honest.
++ *
++ * MSR (X86_FEATURE_CPPC) systems only: the hook must run on the local CPU
++ * (it does local rdmsr/wrmsr via amd_pstate_sample() and a bare wrmsrq),
++ * so remote callbacks are rejected; the shared-memory (PCC mailbox) path
++ * cannot run from this context at all and is never registered.
++ */
++static bool busy_floor __read_mostly;
++module_param(busy_floor, bool, 0644);
++MODULE_PARM_DESC(busy_floor,
++		 "raise min_perf to nominal_perf on recently-busy CPUs (active mode, MSR systems only)");
++
++#define AMD_PSTATE_BUSY_FLOOR_SAMPLE_NS		(10 * NSEC_PER_MSEC)
++/*
++ * Low-write / edge-triggered variant.  Widened decay + lowered busy threshold
++ * so a render thread that is only ~50-80% busy (periodic vsync/GPU-fence waits
++ * every frame) never deactivates mid-benchmark: the floor activates once and
++ * stays, matching EPP=performance's stickiness at ~1-2 CPPC_REQ writes per busy
++ * period instead of the per-sample clobber-heal of the baseline variant.
++ */
++#define AMD_PSTATE_BUSY_FLOOR_DECAY_NS		(300 * NSEC_PER_MSEC)
++#define AMD_PSTATE_BUSY_FLOOR_BUSY_PCT		50
++
++/*
++ * Instrumentation (debug): per-CPU counters incremented on the exact hot-path
++ * write/transition sites, read-only via debugfs so a floor-on benchmark can
++ * measure the actual CPPC_REQ write rate and confirm/refute the write-storm
++ * hypothesis.  floor_msr_writes counts every hook-context wrmsrq (raise or
++ * restore); the cold-path suspend/offline clear() is intentionally excluded.
++ */
++static DEFINE_PER_CPU(u64, floor_msr_writes);
++static DEFINE_PER_CPU(u64, floor_activations);
++static DEFINE_PER_CPU(u64, floor_deactivations);
++
++static int floor_stats_show(struct seq_file *s, void *unused)
++{
++	int cpu;
++
++	for_each_possible_cpu(cpu)
++		seq_printf(s, "cpu%d writes=%llu activations=%llu deactivations=%llu\n",
++			   cpu,
++			   per_cpu(floor_msr_writes, cpu),
++			   per_cpu(floor_activations, cpu),
++			   per_cpu(floor_deactivations, cpu));
++	return 0;
++}
++DEFINE_SHOW_ATTRIBUTE(floor_stats);
++
++static void amd_pstate_busy_floor_apply(struct amd_cpudata *cpudata, u64 cached)
++{
++	union perf_cached perf = READ_ONCE(cpudata->perf);
++	u8 min_perf;
++
++	/*
++	 * Registration precedes the first ->set_policy() that populates the
++	 * limit perf values.  Until then max_limit_perf is 0 and clamping would
++	 * yield min_perf == 0; skip the floor entirely in that window.
++	 */
++	if (!perf.max_limit_perf)
++		return;
++
++	min_perf = clamp(perf.nominal_perf, perf.min_limit_perf,
++			 perf.max_limit_perf);
++
++	cached &= ~AMD_CPPC_MIN_PERF_MASK;
++	cached |= FIELD_PREP(AMD_CPPC_MIN_PERF_MASK, min_perf);
++
++	wrmsrq(MSR_AMD_CPPC_REQ, cached);
++
++	this_cpu_inc(floor_msr_writes);
++	if (READ_ONCE(busy_floor))
++		trace_printk("amd_pstate busy_floor cpu%d RAISE min_perf=%u\n",
++			     cpudata->cpu, min_perf);
++}
++
++static void amd_pstate_busy_floor_release(struct amd_cpudata *cpudata)
++{
++	wrmsrq(MSR_AMD_CPPC_REQ, READ_ONCE(cpudata->cppc_req_cached));
++
++	this_cpu_inc(floor_msr_writes);
++	if (READ_ONCE(busy_floor))
++		trace_printk("amd_pstate busy_floor cpu%d RESTORE\n", cpudata->cpu);
++}
++
++/*
++ * Restore MSR == cppc_req_cached from any context (cross-CPU safe).  Called
++ * before the suspend/offline bios_min_perf resets so their value==prev dedup
++ * cannot skip a real write while the MSR still carries the floor.
++ */
++static void amd_pstate_busy_floor_clear(struct amd_cpudata *cpudata)
++{
++	if (!cpudata->floor_active)
++		return;
++
++	wrmsrq_on_cpu(cpudata->cpu, MSR_AMD_CPPC_REQ,
++		      READ_ONCE(cpudata->cppc_req_cached));
++	cpudata->floor_active = false;
++}
++
++static void amd_pstate_busy_floor_update_util(struct update_util_data *data,
++					      u64 time, unsigned int flags)
++{
++	struct amd_cpudata *cpudata = container_of(data, struct amd_cpudata,
++						   floor_update_util);
++	union perf_cached perf;
++	u64 busy_pct;
++	bool active;
++
++	/*
++	 * Don't allow remote callbacks: update-util hooks are invoked
++	 * cross-CPU on shared-cache wakeups, but amd_pstate_sample() and the
++	 * bare wrmsrq below must touch the local CPU's MSRs.
++	 */
++	if (smp_processor_id() != cpudata->cpu)
++		return;
++
++	if (time - cpudata->floor_last_sample < AMD_PSTATE_BUSY_FLOOR_SAMPLE_NS)
++		return;
++	cpudata->floor_last_sample = time;
++
++	if (!READ_ONCE(busy_floor) || cpudata->suspended) {
++		if (cpudata->floor_active) {
++			amd_pstate_busy_floor_release(cpudata);
++			cpudata->floor_active = false;
++			this_cpu_inc(floor_deactivations);
++		}
++		return;
++	}
++
++	if (amd_pstate_sample(cpudata)) {
++		/* MPERF counts only in C0, TSC always: dmperf/dtsc = busy fraction */
++		busy_pct = div64_u64(cpudata->cur.mperf * 100, cpudata->cur.tsc);
++		if (busy_pct >= AMD_PSTATE_BUSY_FLOOR_BUSY_PCT)
++			cpudata->floor_last_busy = time;
++	}
++
++	perf = READ_ONCE(cpudata->perf);
++	active = perf.max_limit_perf &&
++		 (time - cpudata->floor_last_busy < AMD_PSTATE_BUSY_FLOOR_DECAY_NS);
++
++	/*
++	 * Purely edge-triggered: write exactly once on the inactive->active
++	 * edge and once on active->inactive.  No per-sample clobber-heal: a
++	 * concurrent limit/EPP update can drop the floor until the next
++	 * activation edge, but during steady gaming those updates don't happen,
++	 * so this trades that rare window for EPP=performance-like write
++	 * economy (the tail-latency goal).
++	 */
++	if (active && !cpudata->floor_active) {
++		amd_pstate_busy_floor_apply(cpudata,
++					    READ_ONCE(cpudata->cppc_req_cached));
++		this_cpu_inc(floor_activations);
++	} else if (!active && cpudata->floor_active) {
++		amd_pstate_busy_floor_release(cpudata);
++		this_cpu_inc(floor_deactivations);
++	}
++
++	cpudata->floor_active = active;
++}
++
++static void amd_pstate_busy_floor_register(struct cpufreq_policy *policy)
++{
++	struct amd_cpudata *cpudata = policy->driver_data;
++
++	if (!cpu_feature_enabled(X86_FEATURE_CPPC))
++		return;
++
++	cpufreq_add_update_util_hook(policy->cpu, &cpudata->floor_update_util,
++				     amd_pstate_busy_floor_update_util);
++	cpudata->floor_registered = true;
++}
++
++static void amd_pstate_busy_floor_unregister(struct cpufreq_policy *policy)
++{
++	struct amd_cpudata *cpudata = policy->driver_data;
++
++	if (!cpudata->floor_registered)
++		return;
++
++	cpufreq_remove_update_util_hook(policy->cpu);
++	synchronize_rcu();
++	cpudata->floor_registered = false;
++}
++
+ static int amd_pstate_epp_cpu_init(struct cpufreq_policy *policy)
+ {
+ 	struct amd_cpudata *cpudata;
+@@ -1522,7 +1751,7 @@ static int amd_pstate_epp_cpu_init(struct cpufreq_policy *policy)
+ 
+ 	current_pstate_driver->adjust_perf = NULL;
+ 
+-	current_pstate_driver->adjust_perf = NULL;
++	amd_pstate_busy_floor_register(policy);
+ 
+ 	return 0;
+ 
+@@ -1539,6 +1768,8 @@ static void amd_pstate_epp_cpu_exit(struct cpufreq_policy *policy)
+ 	if (cpudata) {
+ 		union perf_cached perf = READ_ONCE(cpudata->perf);
+ 
++		amd_pstate_busy_floor_unregister(policy);
++
+ 		/* Reset CPPC_REQ MSR to the BIOS value */
+ 		amd_pstate_update_perf(policy, perf.bios_min_perf, 0U, 0U, 0U, false);
+ 
+@@ -1604,6 +1835,9 @@ static int amd_pstate_cpu_offline(struct cpufreq_policy *policy)
+ 	struct amd_cpudata *cpudata = policy->driver_data;
+ 	union perf_cached perf = READ_ONCE(cpudata->perf);
+ 
++	/* Drop the busy floor first so the reset's dedup can't skip a real write */
++	amd_pstate_busy_floor_clear(cpudata);
++
+ 	/*
+ 	 * Reset CPPC_REQ MSR to the BIOS value, this will allow us to retain the BIOS specified
+ 	 * min_perf value across kexec reboots. If this CPU is just onlined normally after this, the
+@@ -1622,6 +1856,14 @@ static int amd_pstate_suspend(struct cpufreq_policy *policy)
+ 	union perf_cached perf = READ_ONCE(cpudata->perf);
+ 	int ret;
+ 
++	/*
++	 * Latch suspended before touching the MSR so the update-util hook stops
++	 * re-asserting the floor, then drop the floor so the reset's dedup can't
++	 * skip a real write while the MSR still holds it.
++	 */
++	cpudata->suspended = true;
++	amd_pstate_busy_floor_clear(cpudata);
++
+ 	/*
+ 	 * Reset CPPC_REQ MSR to the BIOS value, this will allow us to retain the BIOS specified
+ 	 * min_perf value across kexec reboots. If this CPU is just resumed back without kexec,
+@@ -1635,9 +1877,6 @@ static int amd_pstate_suspend(struct cpufreq_policy *policy)
+ 	if (ret)
+ 		return ret;
+ 
+-	/* set this flag to avoid setting core offline*/
+-	cpudata->suspended = true;
+-
+ 	return 0;
+ }
+ 
+@@ -1833,6 +2072,10 @@ static int __init amd_pstate_init(void)
+ 		return ret;
+ 	}
+ 
++	/* debug: read-only busy-floor write/transition counters */
++	debugfs_create_file("amd_pstate_busy_floor", 0444, NULL, NULL,
++			    &floor_stats_fops);
++
+ 	dev_root = bus_get_dev_root(&cpu_subsys);
+ 	if (dev_root) {
+ 		ret = sysfs_create_group(&dev_root->kobj, &amd_pstate_global_attr_group);
+diff --git a/drivers/cpufreq/amd-pstate.h b/drivers/cpufreq/amd-pstate.h
+index cb45fdca27a6..52b2f6aea673 100644
+--- a/drivers/cpufreq/amd-pstate.h
++++ b/drivers/cpufreq/amd-pstate.h
+@@ -9,6 +9,7 @@
+ #define _LINUX_AMD_PSTATE_H
+ 
+ #include <linux/pm_qos.h>
++#include <linux/sched/cpufreq.h>
+ 
+ /*********************************************************************
+  *                        AMD P-state INTERFACE                       *
+@@ -107,6 +108,13 @@ struct amd_cpudata {
+ 	u32	policy;
+ 	bool	suspended;
+ 	u8	epp_default;
++
++	/* busy min_perf floor (active mode, MSR systems only) */
++	struct	update_util_data floor_update_util;
++	u64	floor_last_sample;
++	u64	floor_last_busy;
++	bool	floor_active;
++	bool	floor_registered;
+ };
+ 
+ /*

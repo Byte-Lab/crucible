@@ -1,0 +1,193 @@
+=== pair=1 side=stock 15:25:29 ===
+pair=1 side=stock RQ-KERNEL: 7.2.0-rc3+ 378758ce
+pair=1 side=stock nullb: 4 scsi: 4
+pair=1 side=stock RQ-RESULT bench=nullb_randread rep=1 avg=1653045
+pair=1 side=stock RQ-RESULT bench=nullb_randread rep=2 avg=1686914
+pair=1 side=stock RQ-RESULT bench=nullb_randread rep=3 avg=1673816
+pair=1 side=stock RQ-RESULT bench=nullb_mqdl_randread rep=1 avg=1680413
+pair=1 side=stock RQ-RESULT bench=nullb_mqdl_randread rep=2 avg=1668337
+pair=1 side=stock RQ-RESULT bench=nullb_mqdl_randread rep=3 avg=1650495
+pair=1 side=stock RQ-RESULT bench=scsi_randread rep=1 avg=1040417
+pair=1 side=stock RQ-RESULT bench=scsi_randread rep=2 avg=1034955
+pair=1 side=stock RQ-RESULT bench=scsi_randread rep=3 avg=1016461
+pair=1 side=stock RQ-RESULT bench=scsi_fsyncwrite rep=1 avg=476010
+pair=1 side=stock RQ-RESULT bench=scsi_fsyncwrite rep=2 avg=484000
+pair=1 side=stock RQ-RESULT bench=scsi_fsyncwrite rep=3 avg=484830
+pair=1 side=stock RQ-DONE
+=== pair=1 side=patched 15:27:54 ===
+pair=1 side=patched RQ-KERNEL: 7.2.0-rc3+ 91df360e
+pair=1 side=patched nullb: 4 scsi: 4
+pair=1 side=patched RQ-RESULT bench=nullb_randread rep=1 avg=1606855
+pair=1 side=patched RQ-RESULT bench=nullb_randread rep=2 avg=1608676
+pair=1 side=patched RQ-RESULT bench=nullb_randread rep=3 avg=1592562
+pair=1 side=patched RQ-RESULT bench=nullb_mqdl_randread rep=1 avg=1627888
+pair=1 side=patched RQ-RESULT bench=nullb_mqdl_randread rep=2 avg=1581398
+pair=1 side=patched RQ-RESULT bench=nullb_mqdl_randread rep=3 avg=1576833
+pair=1 side=patched RQ-RESULT bench=scsi_randread rep=1 avg=957872
+pair=1 side=patched RQ-RESULT bench=scsi_randread rep=2 avg=989590
+pair=1 side=patched RQ-RESULT bench=scsi_randread rep=3 avg=990443
+pair=1 side=patched RQ-RESULT bench=scsi_fsyncwrite rep=1 avg=483118
+pair=1 side=patched RQ-RESULT bench=scsi_fsyncwrite rep=2 avg=455950
+pair=1 side=patched RQ-RESULT bench=scsi_fsyncwrite rep=3 avg=458507
+pair=1 side=patched RQ-DONE
+=== pair=2 side=stock 15:30:20 ===
+pair=2 side=stock RQ-KERNEL: 7.2.0-rc3+ 378758ce
+pair=2 side=stock nullb: 4 scsi: 4
+pair=2 side=stock RQ-RESULT bench=nullb_randread rep=1 avg=1575633
+pair=2 side=stock RQ-RESULT bench=nullb_randread rep=2 avg=1575982
+pair=2 side=stock RQ-RESULT bench=nullb_randread rep=3 avg=1610315
+pair=2 side=stock RQ-RESULT bench=nullb_mqdl_randread rep=1 avg=1586351
+pair=2 side=stock RQ-RESULT bench=nullb_mqdl_randread rep=2 avg=1632447
+pair=2 side=stock RQ-RESULT bench=nullb_mqdl_randread rep=3 avg=1639760
+pair=2 side=stock RQ-RESULT bench=scsi_randread rep=1 avg=1015528
+pair=2 side=stock RQ-RESULT bench=scsi_randread rep=2 avg=1006063
+pair=2 side=stock RQ-RESULT bench=scsi_randread rep=3 avg=1011640
+pair=2 side=stock RQ-RESULT bench=scsi_fsyncwrite rep=1 avg=481981
+pair=2 side=stock RQ-RESULT bench=scsi_fsyncwrite rep=2 avg=486139
+pair=2 side=stock RQ-RESULT bench=scsi_fsyncwrite rep=3 avg=484001
+pair=2 side=stock RQ-DONE
+=== pair=2 side=patched 15:32:45 ===
+pair=2 side=patched RQ-KERNEL: 7.2.0-rc3+ 91df360e
+pair=2 side=patched nullb: 4 scsi: 4
+pair=2 side=patched RQ-RESULT bench=nullb_randread rep=1 avg=1648556
+pair=2 side=patched RQ-RESULT bench=nullb_randread rep=2 avg=1617471
+pair=2 side=patched RQ-RESULT bench=nullb_randread rep=3 avg=1630549
+pair=2 side=patched RQ-RESULT bench=nullb_mqdl_randread rep=1 avg=1657186
+pair=2 side=patched RQ-RESULT bench=nullb_mqdl_randread rep=2 avg=1656541
+pair=2 side=patched RQ-RESULT bench=nullb_mqdl_randread rep=3 avg=1661417
+pair=2 side=patched RQ-RESULT bench=scsi_randread rep=1 avg=1020967
+pair=2 side=patched RQ-RESULT bench=scsi_randread rep=2 avg=987331
+pair=2 side=patched RQ-RESULT bench=scsi_randread rep=3 avg=1014119
+pair=2 side=patched RQ-RESULT bench=scsi_fsyncwrite rep=1 avg=473255
+pair=2 side=patched RQ-RESULT bench=scsi_fsyncwrite rep=2 avg=473980
+pair=2 side=patched RQ-RESULT bench=scsi_fsyncwrite rep=3 avg=475400
+pair=2 side=patched RQ-DONE
+=== pair=3 side=stock 15:35:10 ===
+pair=3 side=stock RQ-KERNEL: 7.2.0-rc3+ 378758ce
+pair=3 side=stock nullb: 4 scsi: 4
+pair=3 side=stock RQ-RESULT bench=nullb_randread rep=1 avg=1661993
+pair=3 side=stock RQ-RESULT bench=nullb_randread rep=2 avg=1675613
+pair=3 side=stock RQ-RESULT bench=nullb_randread rep=3 avg=1684214
+pair=3 side=stock RQ-RESULT bench=nullb_mqdl_randread rep=1 avg=1657759
+pair=3 side=stock RQ-RESULT bench=nullb_mqdl_randread rep=2 avg=1666697
+pair=3 side=stock RQ-RESULT bench=nullb_mqdl_randread rep=3 avg=1689609
+pair=3 side=stock RQ-RESULT bench=scsi_randread rep=1 avg=1042451
+pair=3 side=stock RQ-RESULT bench=scsi_randread rep=2 avg=1037382
+pair=3 side=stock RQ-RESULT bench=scsi_randread rep=3 avg=1027983
+pair=3 side=stock RQ-RESULT bench=scsi_fsyncwrite rep=1 avg=477958
+pair=3 side=stock RQ-RESULT bench=scsi_fsyncwrite rep=2 avg=477601
+pair=3 side=stock RQ-RESULT bench=scsi_fsyncwrite rep=3 avg=476685
+pair=3 side=stock RQ-DONE
+=== pair=3 side=patched 15:37:34 ===
+pair=3 side=patched RQ-KERNEL: 7.2.0-rc3+ 91df360e
+pair=3 side=patched nullb: 4 scsi: 4
+pair=3 side=patched RQ-RESULT bench=nullb_randread rep=1 avg=1679115
+pair=3 side=patched RQ-RESULT bench=nullb_randread rep=2 avg=1674253
+pair=3 side=patched RQ-RESULT bench=nullb_randread rep=3 avg=1661443
+pair=3 side=patched RQ-RESULT bench=nullb_mqdl_randread rep=1 avg=1551455
+pair=3 side=patched RQ-RESULT bench=nullb_mqdl_randread rep=2 avg=1583440
+pair=3 side=patched RQ-RESULT bench=nullb_mqdl_randread rep=3 avg=1639401
+pair=3 side=patched RQ-RESULT bench=scsi_randread rep=1 avg=934034
+pair=3 side=patched RQ-RESULT bench=scsi_randread rep=2 avg=987558
+pair=3 side=patched RQ-RESULT bench=scsi_randread rep=3 avg=1008963
+pair=3 side=patched RQ-RESULT bench=scsi_fsyncwrite rep=1 avg=473057
+pair=3 side=patched RQ-RESULT bench=scsi_fsyncwrite rep=2 avg=472679
+pair=3 side=patched RQ-RESULT bench=scsi_fsyncwrite rep=3 avg=451350
+pair=3 side=patched RQ-DONE
+=== pair=4 side=stock 15:39:58 ===
+pair=4 side=stock RQ-KERNEL: 7.2.0-rc3+ 378758ce
+pair=4 side=stock nullb: 4 scsi: 4
+pair=4 side=stock RQ-RESULT bench=nullb_randread rep=1 avg=1487764
+pair=4 side=stock RQ-RESULT bench=nullb_randread rep=2 avg=1470142
+pair=4 side=stock RQ-RESULT bench=nullb_randread rep=3 avg=1495373
+pair=4 side=stock RQ-RESULT bench=nullb_mqdl_randread rep=1 avg=1661679
+pair=4 side=stock RQ-RESULT bench=nullb_mqdl_randread rep=2 avg=1633586
+pair=4 side=stock RQ-RESULT bench=nullb_mqdl_randread rep=3 avg=1634651
+pair=4 side=stock RQ-RESULT bench=scsi_randread rep=1 avg=1017035
+pair=4 side=stock RQ-RESULT bench=scsi_randread rep=2 avg=1012616
+pair=4 side=stock RQ-RESULT bench=scsi_randread rep=3 avg=1013498
+pair=4 side=stock RQ-RESULT bench=scsi_fsyncwrite rep=1 avg=471289
+pair=4 side=stock RQ-RESULT bench=scsi_fsyncwrite rep=2 avg=471887
+pair=4 side=stock RQ-RESULT bench=scsi_fsyncwrite rep=3 avg=472856
+pair=4 side=stock RQ-DONE
+=== pair=4 side=patched 15:42:23 ===
+pair=4 side=patched RQ-KERNEL: 7.2.0-rc3+ 91df360e
+pair=4 side=patched nullb: 4 scsi: 4
+pair=4 side=patched RQ-RESULT bench=nullb_randread rep=1 avg=1624270
+pair=4 side=patched RQ-RESULT bench=nullb_randread rep=2 avg=1583096
+pair=4 side=patched RQ-RESULT bench=nullb_randread rep=3 avg=1534309
+pair=4 side=patched RQ-RESULT bench=nullb_mqdl_randread rep=1 avg=1498408
+pair=4 side=patched RQ-RESULT bench=nullb_mqdl_randread rep=2 avg=1476816
+pair=4 side=patched RQ-RESULT bench=nullb_mqdl_randread rep=3 avg=1519193
+pair=4 side=patched RQ-RESULT bench=scsi_randread rep=1 avg=905784
+pair=4 side=patched RQ-RESULT bench=scsi_randread rep=2 avg=867618
+pair=4 side=patched RQ-RESULT bench=scsi_randread rep=3 avg=927112
+pair=4 side=patched RQ-RESULT bench=scsi_fsyncwrite rep=1 avg=432019
+pair=4 side=patched RQ-RESULT bench=scsi_fsyncwrite rep=2 avg=437245
+pair=4 side=patched RQ-RESULT bench=scsi_fsyncwrite rep=3 avg=431820
+pair=4 side=patched RQ-DONE
+=== pair=5 side=stock 15:44:48 ===
+pair=5 side=stock RQ-KERNEL: 7.2.0-rc3+ 378758ce
+pair=5 side=stock nullb: 4 scsi: 4
+pair=5 side=stock RQ-RESULT bench=nullb_randread rep=1 avg=1455413
+pair=5 side=stock RQ-RESULT bench=nullb_randread rep=2 avg=1486264
+pair=5 side=stock RQ-RESULT bench=nullb_randread rep=3 avg=1522481
+pair=5 side=stock RQ-RESULT bench=nullb_mqdl_randread rep=1 avg=1620271
+pair=5 side=stock RQ-RESULT bench=nullb_mqdl_randread rep=2 avg=1660634
+pair=5 side=stock RQ-RESULT bench=nullb_mqdl_randread rep=3 avg=1682461
+pair=5 side=stock RQ-RESULT bench=scsi_randread rep=1 avg=1031588
+pair=5 side=stock RQ-RESULT bench=scsi_randread rep=2 avg=1015297
+pair=5 side=stock RQ-RESULT bench=scsi_randread rep=3 avg=1027044
+pair=5 side=stock RQ-RESULT bench=scsi_fsyncwrite rep=1 avg=478780
+pair=5 side=stock RQ-RESULT bench=scsi_fsyncwrite rep=2 avg=478936
+pair=5 side=stock RQ-RESULT bench=scsi_fsyncwrite rep=3 avg=478732
+pair=5 side=stock RQ-DONE
+=== pair=5 side=patched 15:47:14 ===
+pair=5 side=patched RQ-KERNEL: 7.2.0-rc3+ 91df360e
+pair=5 side=patched nullb: 4 scsi: 4
+pair=5 side=patched RQ-RESULT bench=nullb_randread rep=1 avg=1671900
+pair=5 side=patched RQ-RESULT bench=nullb_randread rep=2 avg=1667650
+pair=5 side=patched RQ-RESULT bench=nullb_randread rep=3 avg=1688717
+pair=5 side=patched RQ-RESULT bench=nullb_mqdl_randread rep=1 avg=1689139
+pair=5 side=patched RQ-RESULT bench=nullb_mqdl_randread rep=2 avg=1683290
+pair=5 side=patched RQ-RESULT bench=nullb_mqdl_randread rep=3 avg=1683931
+pair=5 side=patched RQ-RESULT bench=scsi_randread rep=1 avg=1041132
+pair=5 side=patched RQ-RESULT bench=scsi_randread rep=2 avg=1036037
+pair=5 side=patched RQ-RESULT bench=scsi_randread rep=3 avg=1029878
+pair=5 side=patched RQ-RESULT bench=scsi_fsyncwrite rep=1 avg=483396
+pair=5 side=patched RQ-RESULT bench=scsi_fsyncwrite rep=2 avg=482502
+pair=5 side=patched RQ-RESULT bench=scsi_fsyncwrite rep=3 avg=480773
+pair=5 side=patched RQ-DONE
+=== pair=6 side=stock 15:49:38 ===
+pair=6 side=stock RQ-KERNEL: 7.2.0-rc3+ 378758ce
+pair=6 side=stock nullb: 4 scsi: 4
+pair=6 side=stock RQ-RESULT bench=nullb_randread rep=1 avg=1687983
+pair=6 side=stock RQ-RESULT bench=nullb_randread rep=2 avg=1693177
+pair=6 side=stock RQ-RESULT bench=nullb_randread rep=3 avg=1668253
+pair=6 side=stock RQ-RESULT bench=nullb_mqdl_randread rep=1 avg=1655108
+pair=6 side=stock RQ-RESULT bench=nullb_mqdl_randread rep=2 avg=1672612
+pair=6 side=stock RQ-RESULT bench=nullb_mqdl_randread rep=3 avg=1687881
+pair=6 side=stock RQ-RESULT bench=scsi_randread rep=1 avg=1031506
+pair=6 side=stock RQ-RESULT bench=scsi_randread rep=2 avg=1021615
+pair=6 side=stock RQ-RESULT bench=scsi_randread rep=3 avg=1018183
+pair=6 side=stock RQ-RESULT bench=scsi_fsyncwrite rep=1 avg=485634
+pair=6 side=stock RQ-RESULT bench=scsi_fsyncwrite rep=2 avg=483186
+pair=6 side=stock RQ-RESULT bench=scsi_fsyncwrite rep=3 avg=484763
+pair=6 side=stock RQ-DONE
+=== pair=6 side=patched 15:52:03 ===
+pair=6 side=patched RQ-KERNEL: 7.2.0-rc3+ 91df360e
+pair=6 side=patched nullb: 4 scsi: 4
+pair=6 side=patched RQ-RESULT bench=nullb_randread rep=1 avg=1690409
+pair=6 side=patched RQ-RESULT bench=nullb_randread rep=2 avg=1681685
+pair=6 side=patched RQ-RESULT bench=nullb_randread rep=3 avg=1691574
+pair=6 side=patched RQ-RESULT bench=nullb_mqdl_randread rep=1 avg=1683302
+pair=6 side=patched RQ-RESULT bench=nullb_mqdl_randread rep=2 avg=1692437
+pair=6 side=patched RQ-RESULT bench=nullb_mqdl_randread rep=3 avg=1687225
+pair=6 side=patched RQ-RESULT bench=scsi_randread rep=1 avg=1050829
+pair=6 side=patched RQ-RESULT bench=scsi_randread rep=2 avg=1041049
+pair=6 side=patched RQ-RESULT bench=scsi_randread rep=3 avg=1039894
+pair=6 side=patched RQ-RESULT bench=scsi_fsyncwrite rep=1 avg=483432
+pair=6 side=patched RQ-RESULT bench=scsi_fsyncwrite rep=2 avg=486355
+pair=6 side=patched RQ-RESULT bench=scsi_fsyncwrite rep=3 avg=482548
+pair=6 side=patched RQ-DONE
+ALL-DONE

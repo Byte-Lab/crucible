@@ -1,0 +1,184 @@
+diff --git a/scheds/rust/scx_lavd/src/bpf/lock.bpf.c b/scheds/rust/scx_lavd/src/bpf/lock.bpf.c
+index cd2bd445..53663cbd 100644
+--- a/scheds/rust/scx_lavd/src/bpf/lock.bpf.c
++++ b/scheds/rust/scx_lavd/src/bpf/lock.bpf.c
+@@ -348,8 +348,119 @@ int rtp_sys_exit_futex_wake(struct tp_syscall_exit *ctx)
+ }
+ 
+ /**
+- * TODO: NTsync driver in recent kernel (when ntsync is fully mainlined)
+- * - https://lore.kernel.org/lkml/20240519202454.1192826-28-zfigura@codeweavers.com/
+- * - https://github.com/torvalds/linux/blob/master/drivers/misc/ntsync.c
+- * - https://www.youtube.com/watch?v=NjU4nyWyhU8
++ * ntsync for Wine/Proton NT synchronization primitives (drivers/misc/ntsync.c)
++ *
++ * ntsync is the in-kernel backend Wine/Proton use to emulate the Windows NT
++ * synchronization primitives -- mutexes, semaphores, and events. It is the
++ * mainlined successor to the out-of-tree esync/fsync (eventfd/futex) hacks and
++ * is the path a modern Proton title takes for every WaitForSingleObject() /
++ * ReleaseMutex() / SetEvent() and friends. The futex tracing above only sees
++ * glibc/NPTL locks, so an ntsync-based game would otherwise get NO lock-holder
++ * boost at all. This fills that gap.
++ *
++ * Unlike futex, ntsync is driven entirely through ioctls on /dev/ntsync file
++ * descriptors, so there is no syscall tracepoint to switch on. We therefore
++ * hook the two ioctl dispatchers and switch on the ioctl command, exactly as
++ * the futex tracepoint path above switches on futex_op:
++ * - ntsync_char_ioctl(): device-level, carries the WAIT_ANY/WAIT_ALL acquire
++ *   path.
++ * - ntsync_obj_ioctl(): per-object, carries the release/signal path
++ *   (mutex unlock, semaphore release, event set/pulse, mutex kill).
++ * Both dispatchers are stored in a 'struct file_operations', so their address
++ * is always taken and they can never be inlined away -- unlike the per-op
++ * helpers (ntsync_sem_release/ntsync_mutex_unlock/ntsync_event_set/...), which
++ * are static and get inlined under common kernel configs (verified absent from
++ * the ntsync module BTF of a stock 6.x build). Hooking the dispatchers is
++ * therefore both robust and minimal: two programs cover every primitive.
++ *
++ * NT-primitive -> lock-boost mapping (a deliberately conservative
++ * approximation, mirroring the futex model above):
++ * - WAIT_ANY / WAIT_ALL returning 0 means the waiter was signaled and now owns
++ *   the object(s) -- it acquired a mutex, decremented a semaphore, or consumed
++ *   an auto-reset event. We treat this as a lock acquisition (inc boost), just
++ *   like a successful futex_wait().
++ * - MUTEX_UNLOCK / SEM_RELEASE / MUTEX_KILL / EVENT_SET / EVENT_PULSE returning
++ *   0 releases or signals an object and may wake waiters. We treat this as a
++ *   lock release (dec boost), just like futex_wake().
++ *
++ * Known approximations:
++ * - NT events are not strictly locks (they model Win32 signaling / condition-
++ *   variable semantics), so boosting an EVENT_SET/EVENT_PULSE holder is the
++ *   same approximation the futex path already makes for condvar wakeups.
++ * - EVENT_RESET merely clears the signaled flag without waking anyone, so it is
++ *   intentionally NOT treated as a release.
++ * - A wait that acquires an abandoned mutex returns -EOWNERDEAD rather than 0;
++ *   we skip that rare recovery path and simply under-boost, which is the safe
++ *   direction.
++ * - We do not track object identity across ioctls, so acquire/release events
++ *   need not balance -- LAVD_FLAG_FUTEX_BOOST is a flag, not a counter, and
++ *   reset_lock_futex_boost() bounds any leftover boost to a single time slice.
++ */
++
++/*
++ * ioctl command decoding (from 'linux/include/uapi/asm-generic/ioctl.h'). We
++ * match on the 8-bit command number (_IOC_NR) plus the 'N' type, so we don't
++ * have to embed the sizeof() of each uapi struct that the full _IOWR()/_IOR()
++ * command encoding carries.
++ */
++#define NTSYNC_IOC_TYPE			'N'
++#define NTSYNC_IOC_NR(cmd)		((cmd) & 0xff)
++#define NTSYNC_IOC_TYPE_OF(cmd)		(((cmd) >> 8) & 0xff)
++
++/*
++ * Command numbers from 'linux/include/uapi/linux/ntsync.h'.
++ */
++#define NTSYNC_IOC_NR_WAIT_ANY		0x82
++#define NTSYNC_IOC_NR_WAIT_ALL		0x83
++#define NTSYNC_IOC_NR_SEM_RELEASE	0x81
++#define NTSYNC_IOC_NR_MUTEX_UNLOCK	0x85
++#define NTSYNC_IOC_NR_MUTEX_KILL	0x86
++#define NTSYNC_IOC_NR_EVENT_SET		0x88
++#define NTSYNC_IOC_NR_EVENT_PULSE	0x8a
++
++/*
++ * Device-level ioctl dispatcher (acquire side):
++ * - static long ntsync_char_ioctl(struct file *file, unsigned int cmd, unsigned long parm)
++ */
++SEC("?fexit/ntsync_char_ioctl")
++int BPF_PROG(fexit_ntsync_char_ioctl, struct file *file, unsigned int cmd, unsigned long parm, long ret)
++{
++	if (ret != 0 || NTSYNC_IOC_TYPE_OF(cmd) != NTSYNC_IOC_TYPE)
++		return 0;
++
++	switch (NTSYNC_IOC_NR(cmd)) {
++	case NTSYNC_IOC_NR_WAIT_ANY:
++	case NTSYNC_IOC_NR_WAIT_ALL:
++		/*
++		 * The waiter was signaled and now owns the object(s).
++		 */
++		inc_futex_boost();
++		break;
++	}
++	return 0;
++}
++
++/*
++ * Per-object ioctl dispatcher (release side):
++ * - static long ntsync_obj_ioctl(struct file *file, unsigned int cmd, unsigned long parm)
+  */
++SEC("?fexit/ntsync_obj_ioctl")
++int BPF_PROG(fexit_ntsync_obj_ioctl, struct file *file, unsigned int cmd, unsigned long parm, long ret)
++{
++	if (ret != 0 || NTSYNC_IOC_TYPE_OF(cmd) != NTSYNC_IOC_TYPE)
++		return 0;
++
++	switch (NTSYNC_IOC_NR(cmd)) {
++	case NTSYNC_IOC_NR_MUTEX_UNLOCK:
++	case NTSYNC_IOC_NR_SEM_RELEASE:
++	case NTSYNC_IOC_NR_MUTEX_KILL:
++	case NTSYNC_IOC_NR_EVENT_SET:
++	case NTSYNC_IOC_NR_EVENT_PULSE:
++		/*
++		 * An object was released or signaled and waiters may have woken.
++		 */
++		dec_futex_boost();
++		break;
++	}
++	return 0;
++}
+diff --git a/scheds/rust/scx_lavd/src/main.rs b/scheds/rust/scx_lavd/src/main.rs
+index 5d06a230..133f0484 100644
+--- a/scheds/rust/scx_lavd/src/main.rs
++++ b/scheds/rust/scx_lavd/src/main.rs
+@@ -482,6 +482,14 @@ impl<'a> Scheduler<'a> {
+                     info!("Fail to attach futex tracepoints.");
+                 }
+             }
++
++            // ntsync is Wine/Proton's NT-synchronization backend (mutex/sem/
++            // event ioctls on /dev/ntsync); the futex hooks above never see it.
++            // Attach the ntsync ioctl-dispatcher hooks too, but only when the
++            // module is loaded and exposes BTF (fexit needs the module BTF).
++            if Self::attach_ntsync_fexit(&mut skel)? == false {
++                info!("ntsync module BTF not present; ntsync lock boosting disabled.");
++            }
+         }
+ 
+         // Initialize CPU topology with CLI arguments
+@@ -574,6 +582,36 @@ impl<'a> Scheduler<'a> {
+         compat::cond_tracepoints_enable(tracepoints)
+     }
+ 
++    fn attach_ntsync_fexit(skel: &mut OpenBpfSkel) -> Result<bool> {
++        // ntsync is a loadable module (CONFIG_NTSYNC=m). An fexit program
++        // resolves its attach target from the module's BTF, which only exists
++        // once the module is loaded, so skip cleanly when it is absent --
++        // otherwise enabling these programs would fail the whole skel load.
++        if std::path::Path::new("/sys/kernel/btf/ntsync").exists() == false {
++            return Ok(false);
++        }
++
++        // Both hooks are the ioctl dispatchers in ntsync's file_operations, so
++        // they are never inlined and always resolvable by name (unlike the
++        // per-op helpers). One covers the acquire path, the other the release
++        // path; the BPF programs switch on the ioctl command.
++        let fexits = vec![
++            ("ntsync_char_ioctl", &skel.progs.fexit_ntsync_char_ioctl),
++            ("ntsync_obj_ioctl", &skel.progs.fexit_ntsync_obj_ioctl),
++        ];
++
++        // fexit attaches via a BTF trampoline, not the ftrace function tracer,
++        // so this check is only a loose proxy for DYNAMIC_FTRACE support --
++        // kept for parity with attach_futex_ftraces(), which gates its fexit
++        // programs the same way.
++        if compat::tracer_available("function")? == false {
++            info!("Function tracer is not available; skipping ntsync fexit hooks.");
++            return Ok(false);
++        }
++
++        compat::cond_kprobes_enable(fexits)
++    }
++
+     fn attach_execve_tracepoints(skel: &mut OpenBpfSkel) -> Result<bool> {
+         let tracepoints = vec![
+             (

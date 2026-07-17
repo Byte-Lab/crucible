@@ -1,0 +1,340 @@
+diff --git a/include/linux/huge_mm.h b/include/linux/huge_mm.h
+index 2f190c90192d..67134dac65d8 100644
+--- a/include/linux/huge_mm.h
++++ b/include/linux/huge_mm.h
+@@ -190,6 +190,26 @@ static inline bool hugepage_global_always(void)
+ 			(1<<TRANSPARENT_HUGEPAGE_FLAG);
+ }
+ 
++/*
++ * The process opted every THP-eligible anonymous VMA into
++ * MADV_HUGEPAGE-like behaviour via prctl(PR_SET_THP_ALWAYS).  This hint is
++ * consulted early, in thp_vma_allowable_orders(), where it widens the
++ * per-vma sysfs order mask (as VM_HUGEPAGE would).  The MMF_DISABLE_THP and
++ * VM_NOHUGEPAGE vetoes are applied *afterwards* by vma_thp_disabled()
++ * inside __thp_vma_allowable_orders(), so they still win.
++ *
++ * 64-bit only: MMF_THP_ALWAYS is bit 32 of a single unsigned long, so the
++ * flag can never be set on 32-bit; short-circuit there so the compiler
++ * drops the out-of-range test_bit().
++ */
++static inline bool vma_thp_always(struct vm_area_struct *vma)
++{
++	if (!IS_ENABLED(CONFIG_64BIT))
++		return false;
++	return vma->vm_mm &&
++	       test_bit(MMF_THP_ALWAYS, &vma->vm_mm->flags);
++}
++
+ static inline int highest_order(unsigned long orders)
+ {
+ 	return fls_long(orders) - 1;
+@@ -289,11 +309,13 @@ unsigned long thp_vma_allowable_orders(struct vm_area_struct *vma,
+ 	/* Optimization to check if required orders are enabled early. */
+ 	if ((tva_flags & TVA_ENFORCE_SYSFS) && vma_is_anonymous(vma)) {
+ 		unsigned long mask = READ_ONCE(huge_anon_orders_always);
++		bool hugepage_hinted = (vm_flags & VM_HUGEPAGE) ||
++				       vma_thp_always(vma);
+ 
+-		if (vm_flags & VM_HUGEPAGE)
++		if (hugepage_hinted)
+ 			mask |= READ_ONCE(huge_anon_orders_madvise);
+ 		if (hugepage_global_always() ||
+-		    ((vm_flags & VM_HUGEPAGE) && hugepage_global_enabled()))
++		    (hugepage_hinted && hugepage_global_enabled()))
+ 			mask |= READ_ONCE(huge_anon_orders_inherit);
+ 
+ 		orders &= mask;
+diff --git a/include/linux/khugepaged.h b/include/linux/khugepaged.h
+index b8d69cfbb58b..1cc2654d17b6 100644
+--- a/include/linux/khugepaged.h
++++ b/include/linux/khugepaged.h
+@@ -13,6 +13,7 @@ extern void __khugepaged_enter(struct mm_struct *mm);
+ extern void __khugepaged_exit(struct mm_struct *mm);
+ extern void khugepaged_enter_vma(struct vm_area_struct *vma,
+ 				 unsigned long vm_flags);
++extern void khugepaged_enter_mm(struct mm_struct *mm);
+ extern void khugepaged_min_free_kbytes_update(void);
+ extern bool current_is_khugepaged(void);
+ extern int collapse_pte_mapped_thp(struct mm_struct *mm, unsigned long addr,
+@@ -40,6 +41,9 @@ static inline void khugepaged_enter_vma(struct vm_area_struct *vma,
+ 					unsigned long vm_flags)
+ {
+ }
++static inline void khugepaged_enter_mm(struct mm_struct *mm)
++{
++}
+ static inline int collapse_pte_mapped_thp(struct mm_struct *mm,
+ 					  unsigned long addr, bool install_pmd)
+ {
+diff --git a/include/linux/mm_types.h b/include/linux/mm_types.h
+index d6b91e8a66d6..b48ee6853bb5 100644
+--- a/include/linux/mm_types.h
++++ b/include/linux/mm_types.h
+@@ -1780,9 +1780,48 @@ enum {
+ #define MMF_TOPDOWN		31	/* mm searches top down by default */
+ #define MMF_TOPDOWN_MASK	(1 << MMF_TOPDOWN)
+ 
++/*
++ * MMF_THP_ALWAYS: treat every THP-eligible anonymous VMA in this mm as if
++ * madvise(MADV_HUGEPAGE) had been called on it — hugepages are allowed
++ * under the global "madvise" policy and allocated with synchronous
++ * compaction ("defrag=always" behaviour).  Set via prctl(PR_SET_THP_ALWAYS)
++ * and inherited across fork()/exec() via MMF_INIT_MASK.  MMF_DISABLE_THP
++ * and per-VMA VM_NOHUGEPAGE take precedence (applied by vma_thp_disabled()
++ * inside __thp_vma_allowable_orders(), after the hint has widened the mask).
++ *
++ * This bit is 64-bit only: mm_struct::flags is a single unsigned long, so
++ * bit 32 requires BITS_PER_LONG > 32.  The whole feature is compiled out on
++ * 32-bit — MMF_THP_ALWAYS_MASK is 0, the prctls return -EINVAL, and every
++ * flag read is gated on IS_ENABLED(CONFIG_64BIT).
++ *
++ * KNOWN LIMITATIONS (non-blocking; for upstream discussion):
++ *  (a) The hint is inherited across exec() (matching MMF_DISABLE_THP), but
++ *      unlike DISABLE it *inflates* resource use, so it flows into an
++ *      exec'd setuid binary that never asked for it.  Kept as-is for
++ *      symmetry with THP_DISABLE; a launcher should set it as late as
++ *      possible and children may clear it or use MADV_NOHUGEPAGE.
++ *  (b) An unprivileged flagged process that keeps faulting/freeing anon
++ *      pages can hold khugepaged unthrottled (see the sleep-skip in
++ *      khugepaged_wait_work()), amplifying scan work up to ~max_ptes_none
++ *      (511) PTEs per collapse attempt.  khugepaged runs at MAX_NICE, so
++ *      this is a fairness, not a liveness, concern.
++ *  (c) The sleep-skip can carry one stale back-to-back pass after a flagged
++ *      process exits (the progress flag outlives the mm by a pass).
++ *  (d) There is no scan-list reprioritisation: a freshly-flagged mm is
++ *      scanned in list order, so time-to-first-collapse on a busy scan
++ *      list is unbounded (the measured ON-side bimodality).
++ */
++#define MMF_THP_ALWAYS		32
++#ifdef CONFIG_64BIT
++#define MMF_THP_ALWAYS_MASK	(1UL << MMF_THP_ALWAYS)
++#else
++#define MMF_THP_ALWAYS_MASK	0	/* feature is 64-bit only */
++#endif
++
+ #define MMF_INIT_MASK		(MMF_DUMPABLE_MASK | MMF_DUMP_FILTER_MASK |\
+ 				 MMF_DISABLE_THP_MASK | MMF_HAS_MDWE_MASK |\
+-				 MMF_VM_MERGE_ANY_MASK | MMF_TOPDOWN_MASK)
++				 MMF_VM_MERGE_ANY_MASK | MMF_TOPDOWN_MASK |\
++				 MMF_THP_ALWAYS_MASK)
+ 
+ static inline unsigned long mmf_init_flags(unsigned long flags)
+ {
+diff --git a/include/uapi/linux/prctl.h b/include/uapi/linux/prctl.h
+index 43dec6eed559..74eaa68f0243 100644
+--- a/include/uapi/linux/prctl.h
++++ b/include/uapi/linux/prctl.h
+@@ -371,4 +371,16 @@ struct prctl_mm_map {
+ # define PR_FUTEX_HASH_GET_SLOTS	2
+ # define PR_FUTEX_HASH_GET_IMMUTABLE	3
+ 
++/*
++ * Per-process opt-in to aggressive Transparent Huge Pages: treat every
++ * THP-eligible anonymous VMA in this mm as if madvise(MADV_HUGEPAGE) had
++ * been called on it.  Hugepages are then allowed even under the global
++ * "madvise" policy and are allocated with synchronous compaction (the
++ * "defrag=always" behaviour), without changing system-wide policy.
++ * Inherited across fork() and exec().  PR_SET_THP_DISABLE and per-VMA
++ * MADV_NOHUGEPAGE take precedence.
++ */
++#define PR_SET_THP_ALWAYS		79
++#define PR_GET_THP_ALWAYS		80
++
+ #endif /* _LINUX_PRCTL_H */
+diff --git a/kernel/sys.c b/kernel/sys.c
+index adc0de0aa364..7c61dfe17c36 100644
+--- a/kernel/sys.c
++++ b/kernel/sys.c
+@@ -8,6 +8,7 @@
+ #include <linux/export.h>
+ #include <linux/mm.h>
+ #include <linux/mm_inline.h>
++#include <linux/khugepaged.h>
+ #include <linux/utsname.h>
+ #include <linux/mman.h>
+ #include <linux/reboot.h>
+@@ -2659,6 +2660,39 @@ SYSCALL_DEFINE5(prctl, int, option, unsigned long, arg2, unsigned long, arg3,
+ 			clear_bit(MMF_DISABLE_THP, &me->mm->flags);
+ 		mmap_write_unlock(me->mm);
+ 		break;
++	case PR_GET_THP_ALWAYS:
++#ifdef CONFIG_64BIT
++		if (arg2 || arg3 || arg4 || arg5)
++			return -EINVAL;
++		error = !!test_bit(MMF_THP_ALWAYS, &me->mm->flags);
++		break;
++#else
++		return -EINVAL;	/* MMF_THP_ALWAYS is 64-bit only */
++#endif
++	case PR_SET_THP_ALWAYS:
++#ifdef CONFIG_64BIT
++		/* MMF_THP_ALWAYS lives above bit 31; needs 64-bit mm flags */
++		BUILD_BUG_ON(MMF_THP_ALWAYS >= BITS_PER_LONG);
++		if (arg3 || arg4 || arg5)
++			return -EINVAL;
++		if (mmap_write_lock_killable(me->mm))
++			return -EINTR;
++		if (arg2)
++			set_bit(MMF_THP_ALWAYS, &me->mm->flags);
++		else
++			clear_bit(MMF_THP_ALWAYS, &me->mm->flags);
++		mmap_write_unlock(me->mm);
++		/*
++		 * Register with and wake khugepaged so an already-populated
++		 * heap starts collapsing within a wakeup rather than after the
++		 * next 10s scan cycle.  No-op when clearing / when THP is off.
++		 */
++		if (arg2)
++			khugepaged_enter_mm(me->mm);
++		break;
++#else
++		return -EINVAL;	/* MMF_THP_ALWAYS is 64-bit only */
++#endif
+ 	case PR_MPX_ENABLE_MANAGEMENT:
+ 	case PR_MPX_DISABLE_MANAGEMENT:
+ 		/* No longer implemented: */
+diff --git a/mm/huge_memory.c b/mm/huge_memory.c
+index 49b98082c540..ff8ad2ae7462 100644
+--- a/mm/huge_memory.c
++++ b/mm/huge_memory.c
+@@ -1279,7 +1279,8 @@ static vm_fault_t __do_huge_pmd_anonymous_page(struct vm_fault *vmf)
+  */
+ gfp_t vma_thp_gfp_mask(struct vm_area_struct *vma)
+ {
+-	const bool vma_madvised = vma && (vma->vm_flags & VM_HUGEPAGE);
++	const bool vma_madvised = vma && ((vma->vm_flags & VM_HUGEPAGE) ||
++					  vma_thp_always(vma));
+ 
+ 	/* Always do synchronous compaction */
+ 	if (test_bit(TRANSPARENT_HUGEPAGE_DEFRAG_DIRECT_FLAG, &transparent_hugepage_flags))
+diff --git a/mm/khugepaged.c b/mm/khugepaged.c
+index a0c040336fc5..fb1ba274fc1c 100644
+--- a/mm/khugepaged.c
++++ b/mm/khugepaged.c
+@@ -76,6 +76,23 @@ static unsigned int khugepaged_scan_sleep_millisecs __read_mostly = 10000;
+ /* during fragmentation poll the hugepage allocator once every minute */
+ static unsigned int khugepaged_alloc_sleep_millisecs __read_mostly = 60000;
+ static unsigned long khugepaged_sleep_expire;
++/*
++ * Set when the last scan pass collapsed a hugepage in an MMF_THP_ALWAYS mm.
++ * Makes khugepaged run the next pass back-to-back (skipping the scan_sleep
++ * throttle) so a freshly-flagged heap collapses within a wakeup or two
++ * instead of dozens.  Self-limiting: once a pass stops finding flagged-mm
++ * collapses this clears and the normal throttle resumes.  Only ever set
++ * when a process has opted in via prctl(PR_SET_THP_ALWAYS); zero effect
++ * otherwise.
++ */
++static bool khugepaged_thp_always_progress;
++/*
++ * Per-pass scan budget for an MMF_THP_ALWAYS mm.  Large enough to sweep a
++ * multi-hundred-MB heap in a single pass, but capped so one giant flagged
++ * mm cannot starve the rest of the scan list indefinitely (HPAGE_PMD_NR
++ * "progress" is charged per PMD scanned).
++ */
++#define KHUGEPAGED_THP_ALWAYS_PAGES	(HPAGE_PMD_NR * 512)
+ static DEFINE_SPINLOCK(khugepaged_mm_lock);
+ static DECLARE_WAIT_QUEUE_HEAD(khugepaged_wait);
+ /*
+@@ -480,6 +497,29 @@ void khugepaged_enter_vma(struct vm_area_struct *vma,
+ 	}
+ }
+ 
++/*
++ * Register @mm with khugepaged (if not already) and kick the daemon so a
++ * freshly-flagged MMF_THP_ALWAYS mm is picked up promptly rather than on
++ * the next 10s wakeup.  Called from prctl(PR_SET_THP_ALWAYS).  A no-op for
++ * the daemon if PMD-order THP is globally off; the wake is harmless then.
++ */
++void khugepaged_enter_mm(struct mm_struct *mm)
++{
++	if (!hugepage_pmd_enabled())
++		return;
++	if (!test_bit(MMF_VM_HUGEPAGE, &mm->flags))
++		__khugepaged_enter(mm);
++	/*
++	 * Collapse the throttle sleep so the kick actually interrupts it:
++	 * khugepaged_should_wakeup() is gated on khugepaged_sleep_expire, so a
++	 * bare wake while a scan_sleep is pending just re-sleeps (the daemon
++	 * almost always has other registered mms on SteamOS).  Every in-tree
++	 * kick (scan/alloc_sleep_millisecs_store) zeroes it first; match them.
++	 */
++	khugepaged_sleep_expire = 0;
++	wake_up_interruptible(&khugepaged_wait);
++}
++
+ void __khugepaged_exit(struct mm_struct *mm)
+ {
+ 	struct khugepaged_mm_slot *mm_slot;
+@@ -2367,6 +2407,7 @@ static unsigned int khugepaged_scan_mm_slot(unsigned int pages, int *result,
+ 	struct mm_struct *mm;
+ 	struct vm_area_struct *vma;
+ 	int progress = 0;
++	bool thp_always;
+ 
+ 	VM_BUG_ON(!pages);
+ 	lockdep_assert_held(&khugepaged_mm_lock);
+@@ -2385,6 +2426,24 @@ static unsigned int khugepaged_scan_mm_slot(unsigned int pages, int *result,
+ 	spin_unlock(&khugepaged_mm_lock);
+ 
+ 	mm = slot->mm;
++	/*
++	 * A process that opted into aggressive THP (prctl(PR_SET_THP_ALWAYS))
++	 * wants its heap collapsed promptly.  Raising the per-mm budget does
++	 * NOT sweep the whole mm in one pass: every *attempted* collapse drops
++	 * mmap_lock and returns from this function (the !mmap_locked break),
++	 * and khugepaged_do_scan() still caps a wakeup at pages_to_scan.  The
++	 * boost only lets a single call cover longer contiguous runs of
++	 * scan-only (non-collapsing) PMDs before hitting the budget; the real
++	 * throughput win is the sleep-skip in khugepaged_wait_work().  Capped
++	 * so a huge flagged mm cannot monopolise a pass.
++	 *
++	 * 64-bit only (see MMF_THP_ALWAYS); IS_ENABLED() drops the out-of-range
++	 * test_bit() on 32-bit, where the flag can never be set.
++	 */
++	thp_always = IS_ENABLED(CONFIG_64BIT) &&
++		     test_bit(MMF_THP_ALWAYS, &mm->flags);
++	if (thp_always)
++		pages = max(pages, (unsigned int)KHUGEPAGED_THP_ALWAYS_PAGES);
+ 	/*
+ 	 * Don't wait for semaphore (to avoid long wait times).  Just move to
+ 	 * the next mm on the list.
+@@ -2455,8 +2514,18 @@ static unsigned int khugepaged_scan_mm_slot(unsigned int pages, int *result,
+ 					khugepaged_scan.address, &mmap_locked, cc);
+ 			}
+ 
+-			if (*result == SCAN_SUCCEED)
++			if (*result == SCAN_SUCCEED) {
+ 				++khugepaged_pages_collapsed;
++				/*
++				 * Actively collapsing a flagged mm's heap:
++				 * signal khugepaged_wait_work() to skip the
++				 * scan_sleep throttle and run the next pass
++				 * back-to-back until the heap is done.
++				 */
++				if (thp_always)
++					WRITE_ONCE(khugepaged_thp_always_progress,
++						   true);
++			}
+ 
+ 			/* move to next address */
+ 			khugepaged_scan.address += HPAGE_PMD_SIZE;
+@@ -2572,6 +2641,18 @@ static void khugepaged_wait_work(void)
+ 		const unsigned long scan_sleep_jiffies =
+ 			msecs_to_jiffies(khugepaged_scan_sleep_millisecs);
+ 
++		/*
++		 * The previous pass collapsed hugepages in an aggressive-THP
++		 * (MMF_THP_ALWAYS) mm — keep scanning back-to-back so its heap
++		 * finishes fast.  Clears itself, so once collapses stop the
++		 * normal throttle resumes.  Never set unless a process opted
++		 * in, so unflagged systems are unaffected.
++		 */
++		if (READ_ONCE(khugepaged_thp_always_progress)) {
++			WRITE_ONCE(khugepaged_thp_always_progress, false);
++			return;
++		}
++
+ 		if (!scan_sleep_jiffies)
+ 			return;
+ 

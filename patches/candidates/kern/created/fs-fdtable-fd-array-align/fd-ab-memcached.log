@@ -1,0 +1,97 @@
+=== pair=1 side=stock 14:27:00 ===
+pair=1 side=stock FD-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=1 side=stock FD-RESULT bench=memcached_churn rep=1 avg=487824.57
+pair=1 side=stock FD-RESULT bench=memcached_churn rep=2 avg=507591.06
+pair=1 side=stock FD-RESULT bench=memcached_churn rep=3 avg=507214.33
+pair=1 side=stock FD-DONE
+=== pair=1 side=patched 14:28:06 ===
+pair=1 side=patched FD-KERNEL: 7.2.0-rc3+ 8bbfdae0
+pair=1 side=patched FD-RESULT bench=memcached_churn rep=1 avg=504233.89
+pair=1 side=patched FD-RESULT bench=memcached_churn rep=2 avg=513261.61
+pair=1 side=patched FD-RESULT bench=memcached_churn rep=3 avg=517958.25
+pair=1 side=patched FD-DONE
+=== pair=2 side=stock 14:29:13 ===
+pair=2 side=stock FD-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=2 side=stock FD-RESULT bench=memcached_churn rep=1 avg=492201.86
+pair=2 side=stock FD-RESULT bench=memcached_churn rep=2 avg=509785.65
+pair=2 side=stock FD-RESULT bench=memcached_churn rep=3 avg=507213.68
+pair=2 side=stock FD-DONE
+=== pair=2 side=patched 14:30:19 ===
+pair=2 side=patched FD-KERNEL: 7.2.0-rc3+ 8bbfdae0
+pair=2 side=patched FD-RESULT bench=memcached_churn rep=1 avg=502498.67
+pair=2 side=patched FD-RESULT bench=memcached_churn rep=2 avg=485599.31
+pair=2 side=patched FD-RESULT bench=memcached_churn rep=3 avg=489974.85
+pair=2 side=patched FD-DONE
+=== pair=3 side=stock 14:31:25 ===
+pair=3 side=stock FD-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=3 side=stock FD-RESULT bench=memcached_churn rep=1 avg=507082.84
+pair=3 side=stock FD-RESULT bench=memcached_churn rep=2 avg=498769.78
+pair=3 side=stock FD-RESULT bench=memcached_churn rep=3 avg=492620.79
+pair=3 side=stock FD-DONE
+=== pair=3 side=patched 14:32:31 ===
+pair=3 side=patched FD-KERNEL: 7.2.0-rc3+ 8bbfdae0
+pair=3 side=patched FD-RESULT bench=memcached_churn rep=1 avg=482819.63
+pair=3 side=patched FD-RESULT bench=memcached_churn rep=2 avg=491677.12
+pair=3 side=patched FD-RESULT bench=memcached_churn rep=3 avg=488051.05
+pair=3 side=patched FD-DONE
+=== pair=4 side=stock 14:33:37 ===
+pair=4 side=stock FD-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=4 side=stock FD-RESULT bench=memcached_churn rep=1 avg=501468.32
+pair=4 side=stock FD-RESULT bench=memcached_churn rep=2 avg=502327.12
+pair=4 side=stock FD-RESULT bench=memcached_churn rep=3 avg=498318.00
+pair=4 side=stock FD-DONE
+=== pair=4 side=patched 14:34:43 ===
+pair=4 side=patched FD-KERNEL: 7.2.0-rc3+ 8bbfdae0
+pair=4 side=patched FD-RESULT bench=memcached_churn rep=1 avg=489782.69
+pair=4 side=patched FD-RESULT bench=memcached_churn rep=2 avg=484321.10
+pair=4 side=patched FD-RESULT bench=memcached_churn rep=3 avg=495306.04
+pair=4 side=patched FD-DONE
+=== pair=5 side=stock 14:35:49 ===
+pair=5 side=stock FD-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=5 side=stock FD-RESULT bench=memcached_churn rep=1 avg=504643.82
+pair=5 side=stock FD-RESULT bench=memcached_churn rep=2 avg=503452.57
+pair=5 side=stock FD-RESULT bench=memcached_churn rep=3 avg=507807.18
+pair=5 side=stock FD-DONE
+=== pair=5 side=patched 14:36:55 ===
+pair=5 side=patched FD-KERNEL: 7.2.0-rc3+ 8bbfdae0
+pair=5 side=patched FD-RESULT bench=memcached_churn rep=1 avg=497790.35
+pair=5 side=patched FD-RESULT bench=memcached_churn rep=2 avg=492625.62
+pair=5 side=patched FD-RESULT bench=memcached_churn rep=3 avg=487261.03
+pair=5 side=patched FD-DONE
+=== pair=6 side=stock 14:38:01 ===
+pair=6 side=stock FD-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=6 side=stock FD-RESULT bench=memcached_churn rep=1 avg=461319.55
+pair=6 side=stock FD-RESULT bench=memcached_churn rep=2 avg=453930.76
+pair=6 side=stock FD-RESULT bench=memcached_churn rep=3 avg=464149.79
+pair=6 side=stock FD-DONE
+=== pair=6 side=patched 14:39:07 ===
+pair=6 side=patched FD-KERNEL: 7.2.0-rc3+ 8bbfdae0
+pair=6 side=patched FD-RESULT bench=memcached_churn rep=1 avg=475515.28
+pair=6 side=patched FD-RESULT bench=memcached_churn rep=2 avg=484610.28
+pair=6 side=patched FD-RESULT bench=memcached_churn rep=3 avg=478733.87
+pair=6 side=patched FD-DONE
+=== pair=7 side=stock 14:40:14 ===
+pair=7 side=stock FD-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=7 side=stock FD-RESULT bench=memcached_churn rep=1 avg=474692.29
+pair=7 side=stock FD-RESULT bench=memcached_churn rep=2 avg=475119.83
+pair=7 side=stock FD-RESULT bench=memcached_churn rep=3 avg=466570.56
+pair=7 side=stock FD-DONE
+=== pair=7 side=patched 14:41:20 ===
+pair=7 side=patched FD-KERNEL: 7.2.0-rc3+ 8bbfdae0
+pair=7 side=patched FD-RESULT bench=memcached_churn rep=1 avg=477526.66
+pair=7 side=patched FD-RESULT bench=memcached_churn rep=2 avg=505513.34
+pair=7 side=patched FD-RESULT bench=memcached_churn rep=3 avg=506787.98
+pair=7 side=patched FD-DONE
+=== pair=8 side=stock 14:42:26 ===
+pair=8 side=stock FD-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=8 side=stock FD-RESULT bench=memcached_churn rep=1 avg=494134.06
+pair=8 side=stock FD-RESULT bench=memcached_churn rep=2 avg=496023.08
+pair=8 side=stock FD-RESULT bench=memcached_churn rep=3 avg=491239.37
+pair=8 side=stock FD-DONE
+=== pair=8 side=patched 14:43:32 ===
+pair=8 side=patched FD-KERNEL: 7.2.0-rc3+ 8bbfdae0
+pair=8 side=patched FD-RESULT bench=memcached_churn rep=1 avg=495886.81
+pair=8 side=patched FD-RESULT bench=memcached_churn rep=2 avg=497737.58
+pair=8 side=patched FD-RESULT bench=memcached_churn rep=3 avg=491751.69
+pair=8 side=patched FD-DONE
+ALL-DONE

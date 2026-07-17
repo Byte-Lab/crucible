@@ -1,0 +1,47 @@
+scx_lavd: Scale the deadline compete window by the oversubscription ratio
+
+The constant LAVD_DL_COMPETE_WINDOW head start disables deadline aging
+whenever a task's deadline delta is smaller than the window: the enqueued
+vtime lands behind cur_logical_clk, which then cannot advance
+(advance_cur_logical_clk() returns early on vlc <= clc), and ordering
+degenerates to a pure deadline-delta ranking with no aging. Under heavy
+oversubscription of similar tasks this starves whichever task the pipeline
+is currently blocked on and serializes the whole workload.
+
+This is the root cause of issue #3303: hackbench -g 8 -l 10000 regressed
+~50% between v1.0.19 and v1.0.20. Bisected to a8a25fcb ("Increase greedy
+factor in deadline calculation") and isolated to the
+LAVD_DL_COMPETE_WINDOW change alone (300ms vs 5ms: 26.0s vs 17.4s on a
+4-thread cpuset, n=10).
+
+A plain revert is not acceptable: the enlarged window is what protects
+latency-critical tasks against a herd of similar-deadline tasks (the
+commit's stated fork-bomb scenario). Measured: reverting the constant
+takes fork-storm schbench wake p99 from 76us to 607us.
+
+Instead, scale the window by how oversubscribed the system is: grant the
+full window while the runnable backlog fits the active CPUs (bit-identical
+to current behavior at light load), and shrink it by nr_active/nr_queued
+beyond that so aging resumes as the backlog grows. This uses the same
+normalization calc_sys_time_slice() and advance_cur_logical_clk() already
+apply, and the same nr_queued <= nr_active boundary as can_boost_slice().
+
+Measured (AMD 7950X; "real-8CPU" = 24 CPUs offlined, single-LLC 4c/8t):
+- hackbench -g8 -l10000 (4-thread cpuset, n=10): 25.54 +/- 0.37 s ->
+  17.43 +/- 0.04 s (EEVDF reference: 16.9 s)
+- fork-storm schbench wake p99 (n=6): 73-85us, unchanged from the
+  constant window (plain revert: 607us; EEVDF: 3604us)
+- interactive harness (6 CPU hogs + schbench): wake p99 -36% (p<0.001),
+  sched-messaging -13% (p<0.001); real-8CPU messaging -20% (p=0.002)
+  with wake p99 unregressed
+- powersave mode: messaging -14% (p=0.001), nothing regressed
+
+Per-task criticality-scaled windows were tried and rejected: scaling from
+avg_lat_cri regresses interactive wake p99 65-91% (the average is
+dominated by the frequently-scheduling tasks themselves), and gating on
+thr_lat_cri loses the fork-storm protection (the threshold rides within a
+hair of max under a storm). The queue-depth scaling keeps the window
+uniform across tasks, so it changes only the aging regime, never the
+relative order of same-epoch enqueues.
+
+Fixes: #3303

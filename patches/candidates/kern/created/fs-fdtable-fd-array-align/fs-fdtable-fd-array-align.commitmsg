@@ -1,0 +1,76 @@
+fs: put files_struct::fd_array on its own cacheline
+
+struct files_struct documents a read/write split: the "read mostly
+part" up front, and "written part on a separate cache line in SMP"
+starting at file_lock. fd_array currently sits at the tail of that
+written line: on 64-bit, slots 0-3 share the cacheline with file_lock,
+next_fd and the three embedded fd bitmap words (on 32-bit it is slots
+0-10).
+
+Until the fdtable is first expanded (a process never using an fd
+number >= NR_OPEN_DEFAULT), fdt->fd points at fd_array, so
+__fget_files_rcu() reads one of its slots on every syscall that takes
+an fd. For low fds - stdio, an epoll fd, a listening socket, a log
+file, which is exactly where long-lived hot fds tend to sit - that
+read lands on the written line, and bounces every time any other
+thread open()s or close()s any fd: alloc_fd() and
+file_close_fd_locked() write file_lock, next_fd and the bitmap words
+on each call. This false sharing violates the split the structure's
+own comments promise.
+
+Give fd_array its own cacheline. The struct size does not change on
+any config: sizeof(fd_array) = NR_OPEN_DEFAULT * sizeof(void *) is a
+multiple of every plausible SMP_CACHE_BYTES (512 on 64-bit, 128 on
+32-bit), so the final size rounds identically and the alignment hole
+simply replaces tail padding. pahole on x86-64:
+
+  before: file_lock @128, ..., fd_array @160 (slots 0-3 in the
+          written line); size 704, 11 cachelines
+  after:  file_lock @128, bitmaps end @160, fd_array @192 (own
+          lines); size 704, 11 cachelines
+
+The write side keeps what it wants hot: file_lock, next_fd and the
+bitmaps stay together. Installing a low fd now dirties two lines
+instead of one for the writer, both L1-resident on the fast path;
+will-it-scale fd-path tests show no regression (see below).
+
+Scope: processes whose fdtable has been expanded past NR_OPEN_DEFAULT
+use a separate kvmalloc'ed array and are unaffected either way. The
+beneficiaries are multithreaded processes that stay under
+NR_OPEN_DEFAULT fds while mixing fd-taking syscalls on low fds with
+open/close churn on other threads - the common thread-pool shape.
+
+Measured with a targeted microbenchmark - one process, N threads
+doing pread(fd 3) while M threads churn dup2(fd, 60)/close (fd 60 so
+the table never expands and churn touches only file_lock and the
+bitmaps, not slots near the readers). Interleaved A/B, alternating
+boots, 8 boots per side x 3 reps, 32-vCPU VM on a Ryzen 9 7950X,
+Welch t-test on per-boot means (n=8/side):
+
+  readers=8  churn=8:  9.45M -> 12.77M reader ops/s (+35.1%,
+                       t=33.6, p<1e-4)
+  readers=24 churn=8: 19.51M -> 21.13M reader ops/s (+8.3%,
+                       t=8.3, p<1e-4)
+  readers=8  churn=0: no significant change [control]
+
+perf c2c on the unpatched kernel (bare metal, AMD IBS) confirms the
+mechanism: the hottest shared cacheline of the run (3325 of 8866
+load HITMs, 37.5%) is files_struct+128 - offset 0x0 file_lock
+(spinlock slowpath), 0x8-0x18 the fd bitmap words written from
+do_dup2()/file_close_fd_locked() - i.e. the readers' fd_array slots
+were being pulled out from under them by fd metadata writes.
+
+No regression on the fd alloc/lookup paths (same rig, all p>0.15):
+will-it-scale open1 threads/processes, dup1 threads/processes, poll2
+threads, pread1 threads. A real-workload sanity check - memcached
+(13 fds, pre-expansion table) under memtier with connection churn
+(reconnect every 50 requests) - is neutral (+0.27%, p=0.75): at that
+churn rate the per-request work dominates, and the patch neither
+helps nor hurts.
+
+The layout has been untouched since ab2af1f50050 ("[PATCH] files:
+files struct with RCU", 2005); the read path that makes fd_array
+hot through fdt->fd long postdates the comment's read/write-split
+design.
+
+Signed-off-by: David Vernet <void@mainfault.com>

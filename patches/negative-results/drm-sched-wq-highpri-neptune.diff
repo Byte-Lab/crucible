@@ -1,0 +1,37 @@
+diff --git a/drivers/gpu/drm/scheduler/sched_main.c b/drivers/gpu/drm/scheduler/sched_main.c
+index 3ac5e6acce04..91e3b951dc85 100644
+--- a/drivers/gpu/drm/scheduler/sched_main.c
++++ b/drivers/gpu/drm/scheduler/sched_main.c
+@@ -1296,12 +1296,30 @@ int drm_sched_init(struct drm_gpu_scheduler *sched, const struct drm_sched_init_
+ 		sched->submit_wq = args->submit_wq;
+ 		sched->own_submit_wq = false;
+ 	} else {
++		/*
++		 * Job dispatch (work_run_job) and fence-signal completion
++		 * (work_free_job) are on the per-frame submission critical path:
++		 * work_run_job is queued directly from the driver's IOCTL/CS thread
++		 * and work_free_job is queued from hardware-fence completion
++		 * (typically hard-IRQ/IH bottom-half context). Since this is an
++		 * ordered, unbound workqueue, its worker is frequently idle between
++		 * dispatches and has to be woken cross-CPU from the submitting
++		 * thread or from IRQ context on every single job/frame. Using
++		 * WQ_HIGHPRI puts the worker in the high-priority unbound pool
++		 * (nice == HIGHPRI_NICE_LEVEL == -20), raising its scheduling
++		 * weight so wakeup preemption strongly favors it over normal
++		 * tasks, cutting wakeup-to-running latency on this per-frame
++		 * path. (Under sched_ext schedulers the same weight flows in via
++		 * p->scx.weight.) Other GPU-latency-sensitive unbound workqueues
++		 * (e.g. KFD's IH workqueue, the TTM device workqueue) already
++		 * use WQ_HIGHPRI for the same reason.
++		 */
+ #ifdef CONFIG_LOCKDEP
+ 		sched->submit_wq = alloc_ordered_workqueue_lockdep_map(args->name,
+-								       WQ_MEM_RECLAIM,
++								       WQ_MEM_RECLAIM | WQ_HIGHPRI,
+ 								       &drm_sched_lockdep_map);
+ #else
+-		sched->submit_wq = alloc_ordered_workqueue(args->name, WQ_MEM_RECLAIM);
++		sched->submit_wq = alloc_ordered_workqueue(args->name, WQ_MEM_RECLAIM | WQ_HIGHPRI);
+ #endif
+ 		if (!sched->submit_wq)
+ 			return -ENOMEM;

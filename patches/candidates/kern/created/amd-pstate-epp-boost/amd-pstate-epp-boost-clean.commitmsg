@@ -1,0 +1,67 @@
+cpufreq/amd-pstate: dynamically bias EPP to performance on busy CPUs
+
+In active (EPP) mode the platform autonomously picks the operating point
+between min_perf and max_perf, biased by the EPP hint, and the kernel only
+rewrites the CPPC request on policy/limit changes. A workload dominated by
+one mostly-busy thread that takes frequent short sleeps -- e.g. a game
+render thread blocking on a futex waiting for the GPU or a worker thread
+every frame -- defeats the platform's utilization tracking: each sleep
+decays the hardware's performance signal, so post-wakeup bursts start at a
+low operating point and the frame-time tail inflates even though the CPU is
+~100% busy at the frame timescale.
+
+Measured on a Steam Deck (Van Gogh APU, EPP=balance_performance) running the
+Civ VI graphics benchmark, which is single-thread CPU-bound (one render
+thread ~98% busy, GPU ~3% busy). The busy core's median frequency sat at
+2.43 GHz -- below 90% of fmax 58% of the time, bimodal 2.4/3.5 GHz -- despite
+98% utilization. Globally forcing EPP=performance lifts the median to
+3.5 GHz and cuts frame-time p999 ~40% with the 1%-low fps up ~16%, but it
+does so on every core and every workload.
+
+This adds an opt-in per-core mechanism that applies the same EPP=performance
+lever, but only to a core that has recently been busy, via a cpufreq
+update-util hook (mirroring intel_pstate's hwp_boost). C0 residency is
+sampled every 10 ms from delta-MPERF/delta-TSC; once a core is >=50% busy it
+is held for a 300 ms decay window, over which its EPP byte in
+MSR_AMD_CPPC_REQ is set to AMD_CPPC_EPP_PERFORMANCE and then restored to the
+policy EPP when the core goes idle. hwp_boost keys off SCHED_CPUFREQ_IOWAIT,
+which futex/GPU-fence waits never set, so a residency trigger is used here
+instead.
+
+An earlier version of this raised min_perf to nominal_perf on a busy core
+instead of touching EPP. It reached the same 3.5 GHz median but *regressed*
+frame-time p999 by ~13-21%: pinning min high keeps the core >= nominal even
+during the micro-idle / vsync waits between frames, which on Van Gogh's
+shared CPU/GPU TDP perturbs the SMU boost management and costs the extreme
+tail. Refuting a write-rate hypothesis (a variant that cut CPPC_REQ writes
+~50x still regressed p999) confirmed the lever, not the write volume, was
+the cause. Biasing EPP -- exactly what echo performance >
+energy_performance_preference does -- reproduces the clean-tail global result
+per-core, while leaving min/des/max untouched.
+
+Enabled on the same Civ VI graphics benchmark (interleaved A/B, n=6, Welch),
+the per-core mechanism lifts the busy core to a 3.5 GHz median and gives
+1%-low fps +31.8% (p=0.014) and frame-time p99 -4.1% (p=0.015) with
+frame-time p999 and average fps unchanged -- i.e. the 1%-low/jank win of the
+global EPP=performance setting without a p999 regression and without raising
+frequency on idle cores or other workloads.
+
+The mechanism:
+ - is edge-triggered: the EPP byte is written once when a busy period starts
+   and the policy request restored once when it ends, so the CPPC_REQ write
+   rate matches EPP=performance's (a couple of writes per busy period);
+ - never writes cppc_req_cached, so all other CPPC_REQ writers (limit
+   updates, EPP stores, suspend/offline/exit resets) keep operating on the
+   policy value and simply clobber the boost, which is re-applied on the next
+   activation edge;
+ - restores the MSR == cppc_req_cached invariant before every bios_min_perf
+   reset (suspend/offline/exit) so the msr_update_perf() value==prev dedup
+   cannot skip a reset while the MSR still holds EPP=0;
+ - rejects remote update-util callbacks (the hook does local rdmsr/wrmsr) and
+   is registered only on MSR (X86_FEATURE_CPPC) systems, since the
+   shared-memory CPPC path cannot run from scheduler context.
+
+It is gated behind a runtime-writable module parameter, dynamic_epp, that
+defaults to off, so behavior is unchanged unless explicitly enabled with
+amd_pstate.dynamic_epp=1 (or echoed to
+/sys/module/amd_pstate/parameters/dynamic_epp).

@@ -1,0 +1,31 @@
+diff --git a/include/linux/mm_types.h b/include/linux/mm_types.h
+index b18c2b2e7d2c..498526fefa3d 100644
+--- a/include/linux/mm_types.h
++++ b/include/linux/mm_types.h
+@@ -1221,16 +1221,16 @@ struct mm_struct {
+ 					     * counters
+ 					     */
+ 		/*
+-		 * Typically the current mmap_lock's offset is 56 bytes from
+-		 * the last cacheline boundary, which is very optimal, as
+-		 * its two hot fields 'count' and 'owner' sit in 2 different
+-		 * cachelines, and when mmap_lock is highly contended, both
+-		 * of the 2 fields will be accessed frequently, current layout
+-		 * will help to reduce cache bouncing.
+-		 *
+-		 * So please be careful with adding new fields before
+-		 * mmap_lock, which can easily push the 2 fields into one
+-		 * cacheline.
++		 * The cacheline placement of mmap_lock matters under
++		 * contention: every locker (readers included) writes
++		 * 'count', so fields that other CPUs read or write on hot
++		 * paths without holding the lock do not belong on its
++		 * cacheline. Fields written only while holding mmap_lock
++		 * are fine as neighbours: the holder's stores add nothing
++		 * beyond the line traffic the lock's own count updates
++		 * already generate (measured neutral vs. a fully dedicated
++		 * cacheline). Any layout change around here should come
++		 * with fresh mmap-heavy benchmark data.
+ 		 */
+ 		struct rw_semaphore mmap_lock;
+ 

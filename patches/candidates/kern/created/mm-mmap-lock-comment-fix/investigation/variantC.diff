@@ -1,0 +1,73 @@
+diff --git a/include/linux/mm_types.h b/include/linux/mm_types.h
+index b18c2b2e7d2c..6b26e8f8f9f8 100644
+--- a/include/linux/mm_types.h
++++ b/include/linux/mm_types.h
+@@ -1207,11 +1207,6 @@ struct mm_struct {
+ 		 */
+ 		atomic_t mm_users;
+ 
+-		/* MM CID related storage */
+-		struct mm_mm_cid mm_cid;
+-
+-		/* sched_cache related statistics */
+-		struct sched_cache_stat sc_stat;
+ #ifdef CONFIG_MMU
+ 		atomic_long_t pgtables_bytes;	/* size of all page tables */
+ #endif
+@@ -1220,19 +1215,30 @@ struct mm_struct {
+ 		spinlock_t page_table_lock; /* Protects page tables and some
+ 					     * counters
+ 					     */
++		unsigned long total_vm;	   /* Total pages mapped */
++		unsigned long data_vm;	   /* VM_WRITE & ~VM_SHARED & ~VM_STACK */
++		unsigned long exec_vm;	   /* VM_EXEC & ~VM_WRITE & ~VM_STACK */
++
++		/* MM CID related storage */
++		struct mm_mm_cid mm_cid;
++
++		/* sched_cache related statistics */
++		struct sched_cache_stat sc_stat;
++
+ 		/*
+-		 * Typically the current mmap_lock's offset is 56 bytes from
+-		 * the last cacheline boundary, which is very optimal, as
+-		 * its two hot fields 'count' and 'owner' sit in 2 different
+-		 * cachelines, and when mmap_lock is highly contended, both
+-		 * of the 2 fields will be accessed frequently, current layout
+-		 * will help to reduce cache bouncing.
+-		 *
+-		 * So please be careful with adding new fields before
+-		 * mmap_lock, which can easily push the 2 fields into one
+-		 * cacheline.
++		 * mmap_lock gets its own cacheline: under contention every
++		 * locker (readers included) writes 'count', and the fields
++		 * directly after it inside the rw_semaphore are written by
++		 * the lock's slowpaths, so any other hot field in this line
++		 * would just add bouncing. The fields that mmap paths write
++		 * while holding the lock live with the other mm counters
++		 * instead, and the quiet fields below fill out the line.
+ 		 */
+-		struct rw_semaphore mmap_lock;
++		struct rw_semaphore mmap_lock ____cacheline_aligned_in_smp;
++		unsigned long hiwater_rss; /* High-watermark of RSS usage */
++		unsigned long hiwater_vm;  /* High-water virtual memory usage */
++		unsigned long locked_vm;   /* Pages that have PG_mlocked set */
++		atomic64_t    pinned_vm;   /* Refcount permanently increased */
+ 
+ 		struct list_head mmlist; /* List of maybe swapped mm's.	These
+ 					  * are globally strung together off
+@@ -1262,14 +1268,6 @@ struct mm_struct {
+ #endif
+ 		struct futex_mm_data	futex;
+ 
+-		unsigned long hiwater_rss; /* High-watermark of RSS usage */
+-		unsigned long hiwater_vm;  /* High-water virtual memory usage */
+-
+-		unsigned long total_vm;	   /* Total pages mapped */
+-		unsigned long locked_vm;   /* Pages that have PG_mlocked set */
+-		atomic64_t    pinned_vm;   /* Refcount permanently increased */
+-		unsigned long data_vm;	   /* VM_WRITE & ~VM_SHARED & ~VM_STACK */
+-		unsigned long exec_vm;	   /* VM_EXEC & ~VM_WRITE & ~VM_STACK */
+ 		unsigned long stack_vm;	   /* VM_STACK */
+ 		union {
+ 			/* Temporary while VMA flags are being converted. */

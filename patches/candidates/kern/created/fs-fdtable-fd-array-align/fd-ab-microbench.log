@@ -1,0 +1,241 @@
+=== pair=1 side=stock 13:09:15 ===
+pair=1 side=stock FD-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=1 side=stock FD-RESULT bench=fd_r8c8 rep=1 avg=9667417
+pair=1 side=stock FD-RESULT bench=fd_r8c0 rep=1 avg=21637449
+pair=1 side=stock FD-RESULT bench=fd_r24c8 rep=1 avg=20109500
+pair=1 side=stock FD-RESULT bench=fd_r8c8 rep=2 avg=9109459
+pair=1 side=stock FD-RESULT bench=fd_r8c0 rep=2 avg=21860962
+pair=1 side=stock FD-RESULT bench=fd_r24c8 rep=2 avg=19972282
+pair=1 side=stock FD-RESULT bench=fd_r8c8 rep=3 avg=9649655
+pair=1 side=stock FD-RESULT bench=fd_r8c0 rep=3 avg=21432042
+pair=1 side=stock FD-RESULT bench=fd_r24c8 rep=3 avg=19662092
+pair=1 side=stock FD-RESULT bench=open1_threads rep=1 avg=1595809
+pair=1 side=stock FD-RESULT bench=open1_threads rep=2 avg=1629520
+pair=1 side=stock FD-RESULT bench=open1_threads rep=3 avg=1568229
+pair=1 side=stock FD-DONE
+=== pair=1 side=patched 13:10:37 ===
+pair=1 side=patched FD-KERNEL: 7.2.0-rc3+ 8bbfdae0
+pair=1 side=patched FD-RESULT bench=fd_r8c8 rep=1 avg=12770970
+pair=1 side=patched FD-RESULT bench=fd_r8c0 rep=1 avg=20663539
+pair=1 side=patched FD-RESULT bench=fd_r24c8 rep=1 avg=21000132
+pair=1 side=patched FD-RESULT bench=fd_r8c8 rep=2 avg=12687601
+pair=1 side=patched FD-RESULT bench=fd_r8c0 rep=2 avg=20307314
+pair=1 side=patched FD-RESULT bench=fd_r24c8 rep=2 avg=21049162
+pair=1 side=patched FD-RESULT bench=fd_r8c8 rep=3 avg=13393605
+pair=1 side=patched FD-RESULT bench=fd_r8c0 rep=3 avg=22004714
+pair=1 side=patched FD-RESULT bench=fd_r24c8 rep=3 avg=21575461
+pair=1 side=patched FD-RESULT bench=open1_threads rep=1 avg=1604731
+pair=1 side=patched FD-RESULT bench=open1_threads rep=2 avg=1611840
+pair=1 side=patched FD-RESULT bench=open1_threads rep=3 avg=1601245
+pair=1 side=patched FD-DONE
+=== pair=2 side=stock 13:12:00 ===
+pair=2 side=stock FD-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=2 side=stock FD-RESULT bench=fd_r8c8 rep=1 avg=9214637
+pair=2 side=stock FD-RESULT bench=fd_r8c0 rep=1 avg=21032191
+pair=2 side=stock FD-RESULT bench=fd_r24c8 rep=1 avg=20376598
+pair=2 side=stock FD-RESULT bench=fd_r8c8 rep=2 avg=9496331
+pair=2 side=stock FD-RESULT bench=fd_r8c0 rep=2 avg=21066510
+pair=2 side=stock FD-RESULT bench=fd_r24c8 rep=2 avg=19044596
+pair=2 side=stock FD-RESULT bench=fd_r8c8 rep=3 avg=9640074
+pair=2 side=stock FD-RESULT bench=fd_r8c0 rep=3 avg=19337773
+pair=2 side=stock FD-RESULT bench=fd_r24c8 rep=3 avg=17497616
+pair=2 side=stock FD-RESULT bench=open1_threads rep=1 avg=1679477
+pair=2 side=stock FD-RESULT bench=open1_threads rep=2 avg=1658781
+pair=2 side=stock FD-RESULT bench=open1_threads rep=3 avg=1624984
+pair=2 side=stock FD-DONE
+=== pair=2 side=patched 13:13:22 ===
+pair=2 side=patched FD-KERNEL: 7.2.0-rc3+ 8bbfdae0
+pair=2 side=patched FD-RESULT bench=fd_r8c8 rep=1 avg=13065867
+pair=2 side=patched FD-RESULT bench=fd_r8c0 rep=1 avg=19484045
+pair=2 side=patched FD-RESULT bench=fd_r24c8 rep=1 avg=20851507
+pair=2 side=patched FD-RESULT bench=fd_r8c8 rep=2 avg=13227240
+pair=2 side=patched FD-RESULT bench=fd_r8c0 rep=2 avg=20853475
+pair=2 side=patched FD-RESULT bench=fd_r24c8 rep=2 avg=21303939
+pair=2 side=patched FD-RESULT bench=fd_r8c8 rep=3 avg=12802663
+pair=2 side=patched FD-RESULT bench=fd_r8c0 rep=3 avg=21452375
+pair=2 side=patched FD-RESULT bench=fd_r24c8 rep=3 avg=22079590
+pair=2 side=patched FD-RESULT bench=open1_threads rep=1 avg=1666523
+pair=2 side=patched FD-RESULT bench=open1_threads rep=2 avg=1598220
+pair=2 side=patched FD-RESULT bench=open1_threads rep=3 avg=1624844
+pair=2 side=patched FD-DONE
+=== pair=3 side=stock 13:14:44 ===
+pair=3 side=stock FD-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=3 side=stock FD-RESULT bench=fd_r8c8 rep=1 avg=9460582
+pair=3 side=stock FD-RESULT bench=fd_r8c0 rep=1 avg=21018333
+pair=3 side=stock FD-RESULT bench=fd_r24c8 rep=1 avg=19787766
+pair=3 side=stock FD-RESULT bench=fd_r8c8 rep=2 avg=9315387
+pair=3 side=stock FD-RESULT bench=fd_r8c0 rep=2 avg=18909194
+pair=3 side=stock FD-RESULT bench=fd_r24c8 rep=2 avg=19726076
+pair=3 side=stock FD-RESULT bench=fd_r8c8 rep=3 avg=9441084
+pair=3 side=stock FD-RESULT bench=fd_r8c0 rep=3 avg=21540879
+pair=3 side=stock FD-RESULT bench=fd_r24c8 rep=3 avg=19869378
+pair=3 side=stock FD-RESULT bench=open1_threads rep=1 avg=1635601
+pair=3 side=stock FD-RESULT bench=open1_threads rep=2 avg=1569283
+pair=3 side=stock FD-RESULT bench=open1_threads rep=3 avg=1633500
+pair=3 side=stock FD-DONE
+=== pair=3 side=patched 13:16:06 ===
+pair=3 side=patched FD-KERNEL: 7.2.0-rc3+ 8bbfdae0
+pair=3 side=patched FD-RESULT bench=fd_r8c8 rep=1 avg=13500310
+pair=3 side=patched FD-RESULT bench=fd_r8c0 rep=1 avg=20883239
+pair=3 side=patched FD-RESULT bench=fd_r24c8 rep=1 avg=21460282
+pair=3 side=patched FD-RESULT bench=fd_r8c8 rep=2 avg=11673716
+pair=3 side=patched FD-RESULT bench=fd_r8c0 rep=2 avg=20080916
+pair=3 side=patched FD-RESULT bench=fd_r24c8 rep=2 avg=21476677
+pair=3 side=patched FD-RESULT bench=fd_r8c8 rep=3 avg=12815965
+pair=3 side=patched FD-RESULT bench=fd_r8c0 rep=3 avg=21134150
+pair=3 side=patched FD-RESULT bench=fd_r24c8 rep=3 avg=21155190
+pair=3 side=patched FD-RESULT bench=open1_threads rep=1 avg=1679861
+pair=3 side=patched FD-RESULT bench=open1_threads rep=2 avg=1575378
+pair=3 side=patched FD-RESULT bench=open1_threads rep=3 avg=1572686
+pair=3 side=patched FD-DONE
+=== pair=4 side=stock 13:17:28 ===
+pair=4 side=stock FD-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=4 side=stock FD-RESULT bench=fd_r8c8 rep=1 avg=9262143
+pair=4 side=stock FD-RESULT bench=fd_r8c0 rep=1 avg=21788458
+pair=4 side=stock FD-RESULT bench=fd_r24c8 rep=1 avg=19807889
+pair=4 side=stock FD-RESULT bench=fd_r8c8 rep=2 avg=10156922
+pair=4 side=stock FD-RESULT bench=fd_r8c0 rep=2 avg=21742070
+pair=4 side=stock FD-RESULT bench=fd_r24c8 rep=2 avg=19659904
+pair=4 side=stock FD-RESULT bench=fd_r8c8 rep=3 avg=9027291
+pair=4 side=stock FD-RESULT bench=fd_r8c0 rep=3 avg=20810085
+pair=4 side=stock FD-RESULT bench=fd_r24c8 rep=3 avg=19907941
+pair=4 side=stock FD-RESULT bench=open1_threads rep=1 avg=1682492
+pair=4 side=stock FD-RESULT bench=open1_threads rep=2 avg=1676421
+pair=4 side=stock FD-RESULT bench=open1_threads rep=3 avg=1594427
+pair=4 side=stock FD-DONE
+=== pair=4 side=patched 13:18:50 ===
+pair=4 side=patched FD-KERNEL: 7.2.0-rc3+ 8bbfdae0
+pair=4 side=patched FD-RESULT bench=fd_r8c8 rep=1 avg=12979368
+pair=4 side=patched FD-RESULT bench=fd_r8c0 rep=1 avg=20046053
+pair=4 side=patched FD-RESULT bench=fd_r24c8 rep=1 avg=21489791
+pair=4 side=patched FD-RESULT bench=fd_r8c8 rep=2 avg=12949279
+pair=4 side=patched FD-RESULT bench=fd_r8c0 rep=2 avg=19906844
+pair=4 side=patched FD-RESULT bench=fd_r24c8 rep=2 avg=20381830
+pair=4 side=patched FD-RESULT bench=fd_r8c8 rep=3 avg=12971641
+pair=4 side=patched FD-RESULT bench=fd_r8c0 rep=3 avg=19352011
+pair=4 side=patched FD-RESULT bench=fd_r24c8 rep=3 avg=21259231
+pair=4 side=patched FD-RESULT bench=open1_threads rep=1 avg=1604642
+pair=4 side=patched FD-RESULT bench=open1_threads rep=2 avg=1630005
+pair=4 side=patched FD-RESULT bench=open1_threads rep=3 avg=1667567
+pair=4 side=patched FD-DONE
+=== pair=5 side=stock 13:20:13 ===
+pair=5 side=stock FD-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=5 side=stock FD-RESULT bench=fd_r8c8 rep=1 avg=9394016
+pair=5 side=stock FD-RESULT bench=fd_r8c0 rep=1 avg=20949208
+pair=5 side=stock FD-RESULT bench=fd_r24c8 rep=1 avg=19976746
+pair=5 side=stock FD-RESULT bench=fd_r8c8 rep=2 avg=9956511
+pair=5 side=stock FD-RESULT bench=fd_r8c0 rep=2 avg=19054027
+pair=5 side=stock FD-RESULT bench=fd_r24c8 rep=2 avg=19097719
+pair=5 side=stock FD-RESULT bench=fd_r8c8 rep=3 avg=8899156
+pair=5 side=stock FD-RESULT bench=fd_r8c0 rep=3 avg=17614124
+pair=5 side=stock FD-RESULT bench=fd_r24c8 rep=3 avg=18815632
+pair=5 side=stock FD-RESULT bench=open1_threads rep=1 avg=1642585
+pair=5 side=stock FD-RESULT bench=open1_threads rep=2 avg=1601300
+pair=5 side=stock FD-RESULT bench=open1_threads rep=3 avg=1676873
+pair=5 side=stock FD-DONE
+=== pair=5 side=patched 13:21:35 ===
+pair=5 side=patched FD-KERNEL: 7.2.0-rc3+ 8bbfdae0
+pair=5 side=patched FD-RESULT bench=fd_r8c8 rep=1 avg=12049143
+pair=5 side=patched FD-RESULT bench=fd_r8c0 rep=1 avg=20885059
+pair=5 side=patched FD-RESULT bench=fd_r24c8 rep=1 avg=20323027
+pair=5 side=patched FD-RESULT bench=fd_r8c8 rep=2 avg=12518757
+pair=5 side=patched FD-RESULT bench=fd_r8c0 rep=2 avg=17726271
+pair=5 side=patched FD-RESULT bench=fd_r24c8 rep=2 avg=20607931
+pair=5 side=patched FD-RESULT bench=fd_r8c8 rep=3 avg=12149076
+pair=5 side=patched FD-RESULT bench=fd_r8c0 rep=3 avg=15316272
+pair=5 side=patched FD-RESULT bench=fd_r24c8 rep=3 avg=19625967
+pair=5 side=patched FD-RESULT bench=open1_threads rep=1 avg=1658140
+pair=5 side=patched FD-RESULT bench=open1_threads rep=2 avg=1594312
+pair=5 side=patched FD-RESULT bench=open1_threads rep=3 avg=1608460
+pair=5 side=patched FD-DONE
+=== pair=6 side=stock 13:22:57 ===
+pair=6 side=stock FD-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=6 side=stock FD-RESULT bench=fd_r8c8 rep=1 avg=9732247
+pair=6 side=stock FD-RESULT bench=fd_r8c0 rep=1 avg=17160992
+pair=6 side=stock FD-RESULT bench=fd_r24c8 rep=1 avg=19032379
+pair=6 side=stock FD-RESULT bench=fd_r8c8 rep=2 avg=10233196
+pair=6 side=stock FD-RESULT bench=fd_r8c0 rep=2 avg=17751858
+pair=6 side=stock FD-RESULT bench=fd_r24c8 rep=2 avg=18707046
+pair=6 side=stock FD-RESULT bench=fd_r8c8 rep=3 avg=8825287
+pair=6 side=stock FD-RESULT bench=fd_r8c0 rep=3 avg=17320520
+pair=6 side=stock FD-RESULT bench=fd_r24c8 rep=3 avg=19499581
+pair=6 side=stock FD-RESULT bench=open1_threads rep=1 avg=1578481
+pair=6 side=stock FD-RESULT bench=open1_threads rep=2 avg=1628226
+pair=6 side=stock FD-RESULT bench=open1_threads rep=3 avg=1664193
+pair=6 side=stock FD-DONE
+=== pair=6 side=patched 13:24:19 ===
+pair=6 side=patched FD-KERNEL: 7.2.0-rc3+ 8bbfdae0
+pair=6 side=patched FD-RESULT bench=fd_r8c8 rep=1 avg=12475934
+pair=6 side=patched FD-RESULT bench=fd_r8c0 rep=1 avg=17518074
+pair=6 side=patched FD-RESULT bench=fd_r24c8 rep=1 avg=21616313
+pair=6 side=patched FD-RESULT bench=fd_r8c8 rep=2 avg=12868991
+pair=6 side=patched FD-RESULT bench=fd_r8c0 rep=2 avg=19240904
+pair=6 side=patched FD-RESULT bench=fd_r24c8 rep=2 avg=20831108
+pair=6 side=patched FD-RESULT bench=fd_r8c8 rep=3 avg=12634690
+pair=6 side=patched FD-RESULT bench=fd_r8c0 rep=3 avg=17661292
+pair=6 side=patched FD-RESULT bench=fd_r24c8 rep=3 avg=21668286
+pair=6 side=patched FD-RESULT bench=open1_threads rep=1 avg=1599810
+pair=6 side=patched FD-RESULT bench=open1_threads rep=2 avg=1621839
+pair=6 side=patched FD-RESULT bench=open1_threads rep=3 avg=1570153
+pair=6 side=patched FD-DONE
+=== pair=7 side=stock 13:25:41 ===
+pair=7 side=stock FD-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=7 side=stock FD-RESULT bench=fd_r8c8 rep=1 avg=8981584
+pair=7 side=stock FD-RESULT bench=fd_r8c0 rep=1 avg=17379784
+pair=7 side=stock FD-RESULT bench=fd_r24c8 rep=1 avg=19179891
+pair=7 side=stock FD-RESULT bench=fd_r8c8 rep=2 avg=9493358
+pair=7 side=stock FD-RESULT bench=fd_r8c0 rep=2 avg=19352060
+pair=7 side=stock FD-RESULT bench=fd_r24c8 rep=2 avg=20049576
+pair=7 side=stock FD-RESULT bench=fd_r8c8 rep=3 avg=9750405
+pair=7 side=stock FD-RESULT bench=fd_r8c0 rep=3 avg=18545504
+pair=7 side=stock FD-RESULT bench=fd_r24c8 rep=3 avg=19619829
+pair=7 side=stock FD-RESULT bench=open1_threads rep=1 avg=1573556
+pair=7 side=stock FD-RESULT bench=open1_threads rep=2 avg=1594581
+pair=7 side=stock FD-RESULT bench=open1_threads rep=3 avg=1633301
+pair=7 side=stock FD-DONE
+=== pair=7 side=patched 13:27:04 ===
+pair=7 side=patched FD-KERNEL: 7.2.0-rc3+ 8bbfdae0
+pair=7 side=patched FD-RESULT bench=fd_r8c8 rep=1 avg=13521601
+pair=7 side=patched FD-RESULT bench=fd_r8c0 rep=1 avg=18353057
+pair=7 side=patched FD-RESULT bench=fd_r24c8 rep=1 avg=21008722
+pair=7 side=patched FD-RESULT bench=fd_r8c8 rep=2 avg=13073660
+pair=7 side=patched FD-RESULT bench=fd_r8c0 rep=2 avg=17278478
+pair=7 side=patched FD-RESULT bench=fd_r24c8 rep=2 avg=21088174
+pair=7 side=patched FD-RESULT bench=fd_r8c8 rep=3 avg=12430282
+pair=7 side=patched FD-RESULT bench=fd_r8c0 rep=3 avg=18995144
+pair=7 side=patched FD-RESULT bench=fd_r24c8 rep=3 avg=20856212
+pair=7 side=patched FD-RESULT bench=open1_threads rep=1 avg=1601968
+pair=7 side=patched FD-RESULT bench=open1_threads rep=2 avg=1626752
+pair=7 side=patched FD-RESULT bench=open1_threads rep=3 avg=1568506
+pair=7 side=patched FD-DONE
+=== pair=8 side=stock 13:28:26 ===
+pair=8 side=stock FD-KERNEL: 7.2.0-rc3+ eb6651b5
+pair=8 side=stock FD-RESULT bench=fd_r8c8 rep=1 avg=9498475
+pair=8 side=stock FD-RESULT bench=fd_r8c0 rep=1 avg=20874458
+pair=8 side=stock FD-RESULT bench=fd_r24c8 rep=1 avg=18875350
+pair=8 side=stock FD-RESULT bench=fd_r8c8 rep=2 avg=9477256
+pair=8 side=stock FD-RESULT bench=fd_r8c0 rep=2 avg=21791530
+pair=8 side=stock FD-RESULT bench=fd_r24c8 rep=2 avg=19603304
+pair=8 side=stock FD-RESULT bench=fd_r8c8 rep=3 avg=9176931
+pair=8 side=stock FD-RESULT bench=fd_r8c0 rep=3 avg=21378923
+pair=8 side=stock FD-RESULT bench=fd_r24c8 rep=3 avg=20383233
+pair=8 side=stock FD-RESULT bench=open1_threads rep=1 avg=1625309
+pair=8 side=stock FD-RESULT bench=open1_threads rep=2 avg=1671185
+pair=8 side=stock FD-RESULT bench=open1_threads rep=3 avg=1659248
+pair=8 side=stock FD-DONE
+=== pair=8 side=patched 13:29:48 ===
+pair=8 side=patched FD-KERNEL: 7.2.0-rc3+ 8bbfdae0
+pair=8 side=patched FD-RESULT bench=fd_r8c8 rep=1 avg=12692589
+pair=8 side=patched FD-RESULT bench=fd_r8c0 rep=1 avg=18389415
+pair=8 side=patched FD-RESULT bench=fd_r24c8 rep=1 avg=21989498
+pair=8 side=patched FD-RESULT bench=fd_r8c8 rep=2 avg=12352402
+pair=8 side=patched FD-RESULT bench=fd_r8c0 rep=2 avg=21489061
+pair=8 side=patched FD-RESULT bench=fd_r24c8 rep=2 avg=21625965
+pair=8 side=patched FD-RESULT bench=fd_r8c8 rep=3 avg=12920483
+pair=8 side=patched FD-RESULT bench=fd_r8c0 rep=3 avg=19561173
+pair=8 side=patched FD-RESULT bench=fd_r24c8 rep=3 avg=20894493
+pair=8 side=patched FD-RESULT bench=open1_threads rep=1 avg=1671872
+pair=8 side=patched FD-RESULT bench=open1_threads rep=2 avg=1571926
+pair=8 side=patched FD-RESULT bench=open1_threads rep=3 avg=1625434
+pair=8 side=patched FD-DONE
+ALL-DONE

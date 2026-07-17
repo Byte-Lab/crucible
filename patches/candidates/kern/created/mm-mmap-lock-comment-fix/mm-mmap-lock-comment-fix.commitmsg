@@ -1,0 +1,72 @@
+mm: replace stale mmap_lock cacheline-placement comment
+
+The comment above mmap_lock says its offset is "typically" 56 bytes
+from the last cacheline boundary so that the rw_semaphore's 'count'
+and 'owner' hot fields sit in two different cachelines, calls that
+placement "very optimal", and warns against adding fields before
+mmap_lock that would disturb it. That guidance is doubly stale:
+
+1. The layout it describes no longer exists. Since commit
+   8cea569ca785 ("sched/mmcid: Use proper data structures") inserted
+   the cacheline-aligned mm_cid struct (and the sched_cache stats
+   added another aligned block), mmap_lock sits 16 bytes past the
+   last cacheline boundary on x86-64 defconfig-like builds: 'count'
+   and 'owner' share one cacheline.
+
+2. Re-measuring both layouts shows the described optimum has
+   inverted, at least on this machine. On a Ryzen 9 7950X (32-thread
+   VM, will-it-scale mmap1_threads -t 32, interleaved A/B alternating
+   boots, 8 boots/side x 3 reps = n=24/side, Welch t-test), restoring
+   the offset-56 split REGRESSES throughput by 1.7% (p=0.03) against
+   today's offset-16 layout, and a full restoration that also
+   separates the neighbouring fault-path fields regresses by 3.0%
+   (p=0.001). Isolating mmap_lock on a fully dedicated cacheline
+   performs identically to the current layout (-0.05%, p=0.94),
+   which also shows the current co-tenants (pgtables_bytes,
+   map_count, page_table_lock) cost nothing measurable on top of the
+   line traffic the lock's own count updates already generate.
+
+   A plausible explanation: on today's code every acquisition writes
+   both 'count' and 'owner' (readers set owner via
+   rwsem_set_reader_owned, writers store it on acquire), so splitting
+   the two fields makes every acquire touch two cachelines, while the
+   spinner traffic on 'owner' that the split was meant to isolate is
+   OSQ-serialized to essentially one poller at a time (OSQ head, plus
+   a handoff waiter). The split was established by commit
+   2e3025434a6b ("mm: relocate 'write_protect_seq' in struct
+   mm_struct") from a 2021 report (9.2% will-it-scale swing) whose
+   bisected base predates the rwsem slowpath reworks in the years
+   since (e.g. commit 617f3ef95177 ("locking/rwsem: Remove reader
+   optimistic spinning") is not in the ancestry of the bisected
+   commit), and the microarchitecture changed too (2021 Intel 0day
+   vs. this Zen 4). The honest summary is that the optimum is at
+   best uarch-dependent, not universal - which is enough to retire a
+   comment that presents it as settled.
+
+This is single-machine (Zen 4) data; if the split still helps on
+other microarchitectures, that only reinforces the replacement
+text's actual prescription: keep lock-free-hot fields off the line,
+same-lock-writer fields are free, and re-measure before re-tuning.
+
+Someone reading the current comment and "fixing" the offset back to
+56 would regress the very benchmark the comment's lore comes from.
+
+The wording being replaced was last touched by commit 61dc4358d37a
+("mm: correct misleading comment on mmap_lock field in mm_struct"),
+which converted the offset notation; the underlying guidance dates
+to 2e3025434a6b.
+
+No functional change.
+
+Signed-off-by: David Vernet <void@mainfault.com>
+
+---
+(below-the-cutline notes for the submitter, not for git history:
+ supporting data: deck/patches/mainline/mmap-lock-layout-EVIDENCE.md,
+ raw logs deck/patches/mainline/wis-ab-var{A,B,C}.log.
+ Suggested Cc: Feng Tang, Adrian Huang (Lenovo), Andrew Morton,
+ Lorenzo Stoakes, David Hildenbrand, Liam Howlett,
+ Suren Baghdasaryan, Vlastimil Babka, Waiman Long, Peter Zijlstra,
+ linux-mm - use their current addresses from MAINTAINERS/git log.
+ Getting an Intel datapoint before posting would preempt the likely
+ "still helps on Intel" reply.)

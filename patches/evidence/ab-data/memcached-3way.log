@@ -1,0 +1,27 @@
+memcached (VM, 8 vCPU oversubscribed, -t8 +memtier -t8 -c8 ratio 1:10) — EEVDF vs stock scx_lavd vs #1 compete-window
+cols: ops/sec p99(ms) p99.9(ms)
+r1 EEVDF[573308 1.007 5.119] STOCK[606933 0.351 1.231] CW[877746 0.391 1.111]
+r2 EEVDF[873421 1.047 4.191] STOCK[626281 0.255 0.807] CW[629764 0.255 0.671]
+r3 EEVDF[517510 1.471 5.119] STOCK[718717 0.487 4.575] CW[631973 0.223 0.599]
+r4 EEVDF[805316 0.839 4.991] STOCK[720522 0.447 4.223] CW[771109 0.263 0.823]
+r5 EEVDF[763272 0.919 5.119] STOCK[607857 0.287 0.815] CW[824198 0.351 0.919]
+r6 EEVDF[384107 1.159 5.119] STOCK[615145 0.287 0.831] CW[627057 0.303 0.759]
+r7 EEVDF[387876 1.071 5.119] STOCK[461455 0.319 0.879] CW[630106 0.247 0.607]
+r8 EEVDF[551027 0.927 4.895] STOCK[909030 0.255 0.719] CW[620408 0.479 1.951]
+
+=== focused STOCK scx_lavd vs #1 compete-window, 10 rounds (ops p99 p99.9) ===
+r1 STOCK[650146 0.647 4.671] CW[1117013 0.431 1.103]
+r2 STOCK[716362 0.599 2.719] CW[816941 0.303 0.847]
+r3 STOCK[575481 0.255 0.687] CW[823735 0.303 0.687]
+r4 STOCK[573944 0.423 1.223] CW[605850 0.327 0.791]
+r5 STOCK[612744 0.455 2.143] CW[462642 0.391 1.007]
+r6 STOCK[624239 0.223 0.599] CW[935569 0.279 0.783]
+r7 STOCK[621278 0.319 1.015] CW[631019 0.287 0.751]
+r8 STOCK[629031 0.247 0.711] CW[622550 0.247 0.775]
+r9 STOCK[460284 0.287 0.767] CW[631775 0.303 0.783]
+r10 STOCK[927769 0.231 0.615] CW[728461 0.271 0.783]
+
+=== clean 12s runs STOCK vs #1 (n=10): throughput +1.1% (neutral), p99.9 spikes STOCK 1/10 CW 0/10; combined n=20 STOCK 4/20 spikes CW 0/20 ===
+=== co-location (memcached+6 CPU-hogs) STOCK vs #2 preempt-kick (n=8): #2 p99 -11%, p99.9 spikes STOCK 2/8 -> KICK 0/8, but throughput -11% (trade-off) ===
+CONCLUSION: scx_lavd >> EEVDF is the robust memcached win (+71% ops, -66% p99, -78% p99.9).
+My scx_lavd patches (#1,#2) give only marginal tail-spike-consistency benefits on memcached (steady-state neutral / throughput trade-off). THP neutral. No clean NEW patch win on memcached; a netstack/epoll/syscall patch would be the next avenue.

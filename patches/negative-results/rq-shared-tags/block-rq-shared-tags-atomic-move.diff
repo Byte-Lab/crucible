@@ -1,0 +1,27 @@
+diff --git a/include/linux/blkdev.h b/include/linux/blkdev.h
+index 9213a5716f95..114fa609291c 100644
+--- a/include/linux/blkdev.h
++++ b/include/linux/blkdev.h
+@@ -573,8 +573,6 @@ struct request_queue {
+ 	struct timer_list	timeout;
+ 	struct work_struct	timeout_work;
+ 
+-	atomic_t		nr_active_requests_shared_tags;
+-
+ 	struct blk_mq_tags	*sched_shared_tags;
+ 
+ 	struct list_head	icq_list;
+@@ -587,6 +585,13 @@ struct request_queue {
+ 
+ 	int			node;
+ 
++	/*
++	 * Written on every request start/finish when the tag_set is
++	 * shared (BLK_MQ_F_TAG_HCTX_SHARED). Keep it off the read-mostly
++	 * cacheline above - root_blkg is read per bio.
++	 */
++	atomic_t		nr_active_requests_shared_tags;
++
+ 	spinlock_t		requeue_lock;
+ 	struct list_head	requeue_list;
+ 	struct delayed_work	requeue_work;

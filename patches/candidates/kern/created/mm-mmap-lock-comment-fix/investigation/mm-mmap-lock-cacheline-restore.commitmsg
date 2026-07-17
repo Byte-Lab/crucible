@@ -1,0 +1,69 @@
+mm: restore mmap_lock count/owner cacheline split in mm_struct
+
+Commit 2e3025434a6b ("mm: relocate 'write_protect_seq' in struct
+mm_struct") deliberately placed mmap_lock at offset 56 from a cacheline
+boundary so that its two hot fields 'count' and 'owner' sit in two
+different cachelines, quoting Linus' analysis of why that layout is
+optimal under contention (new waiters cmpxchg 'count' on the first
+line, spinners poll 'owner' on the second). Breaking that split was
+measured back then as a 9.2% will-it-scale regression, and the comment
+above mmap_lock (refreshed by commit 61dc4358d37a ("mm: correct
+misleading comment on mmap_lock field in mm_struct")) explicitly warns:
+"please be careful with adding new fields before mmap_lock".
+
+Commit 8cea569ca785 ("sched/mmcid: Use proper data structures")
+inserted the 192-byte cacheline-aligned mm_cid struct before mmap_lock,
+and the sched_cache statistics later added another aligned 64 bytes.
+On x86-64 with SCHED_MM_CID=y mmap_lock now sits at offset 16 from the
+cacheline boundary: 'count' and 'owner' share one line, together with
+pgtables_bytes and page_table_lock, which other CPUs write from
+page-table allocation and teardown paths. The 64-byte alignment of
+mm_cid also left a dead 56-byte hole after mm_users.
+
+Restore the documented layout:
+
+  - Move pgtables_bytes, map_count, page_table_lock and mmlist into
+    the hole after mm_users, shrinking it from 56 to 24 bytes and
+    taking those write paths off mmap_lock's line. This does put them
+    on the same line as membarrier_state (read by switch_mm()) and
+    mm_users; that is strictly better than sharing with mmap_lock's
+    'count' as they do today, page_table_lock is cold with split
+    ptlocks (only pud/pmd-level table allocation), and pgtables_bytes
+    writes are once-per-PTE-table plus a burst in free_pgtables() --
+    [context-switch benchmark placeholder to confirm no regression].
+
+  - Move the seven VM counters (hiwater_rss through exec_vm, 56 bytes
+    on 64-bit) directly before mmap_lock, with a cacheline alignment
+    anchor on hiwater_rss. They are written under mmap_lock write or
+    from low-rate paths (update_hiwater_rss() from reclaim/migration,
+    pinned_vm accounting from pin/unpin), so 'count' shares its line
+    with nothing that other CPUs access at high frequency, and 'owner'
+    starts the following line again.
+
+The anchor makes the offset independent of the config-dependent fields
+above it (mm_cid and sc_stat both collapse to empty unaligned structs
+when their configs are off, so the offset previously depended on
+config); it costs no space when either of those aligned structs is
+present, and at most 24 bytes of padding otherwise.
+
+pahole on x86-64 (SCHED_MM_CID=y, SCHED_CACHE=y, PER_VMA_LOCK=y):
+
+  before: mmap_lock at 464 (offset 16), count+owner same line,
+          sharing with page_table_lock/pgtables_bytes;
+          56-byte hole at 136; size 1728, 27 cachelines
+  after:  mmap_lock at 504 (offset 56), count last word of its line,
+          owner opening the next; size 1664, 26 cachelines
+
+PER_VMA_LOCK fields sit after mmap_lock, so its offset is unaffected
+by that config; with !CONFIG_MMU, pgtables_bytes vanishes but the
+anchor keeps the offset at 56.
+
+[benchmark results placeholder - will-it-scale mmap1/page_fault
+ threads interleaved A/B + context-switch-heavy benchmark, in flight]
+
+Fixes: 8cea569ca785 ("sched/mmcid: Use proper data structures")
+Signed-off-by: David Vernet <void@mainfault.com>
+
+Cc: Feng Tang, Adrian Huang, Thomas Gleixner, Peter Zijlstra,
+Mathieu Desnoyers, Andrew Morton, linux-mm
+(base for submission: akpm mm-unstable)

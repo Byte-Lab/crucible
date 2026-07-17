@@ -1,0 +1,41 @@
+scx_lavd: Escalate a won preemption victim with SCX_KICK_PREEMPT
+
+The IPI-free soft preemption (setting the victim's slice to 1) relies on
+the victim reaching a scheduling point. A tight-loop CPU-bound victim has
+no voluntary scheduling point and only re-enters the scheduler at the
+next HZ tick, so the shortened slice frequently never takes effect in
+time and the preemption is granted but not delivered.
+
+Traced on a 32-thread AMD 7950X under 1.6x oversubscription (16 CPU hogs
++ schbench; 12s raw ftrace, zero buffer overruns, 12,383 wake->run delays
+over 3ms analyzed): only <7% of delayed wakeups ever displaced a hog;
+92% got a CPU only when a peer voluntarily slept; the wake-latency tail
+scales with slice length accordingly.
+
+Escalate with scx_bpf_kick_cpu(victim, SCX_KICK_PREEMPT) when this CPU
+wins the per-victim CAS on est_stopping_clk. The IPI rate is bounded
+three ways: the existing thr_lat_cri gate (top ~1.6% of wakeups by
+default), at most one IPI per victim per running-epoch (CAS-gated, racing
+losers see est_stopping_clk == 0 and back off), and each CPU cannot be
+re-kicked until its est_stopping_clk is refreshed in lavd_running().
+The overrun-slice-boost cancel path now also delivers the immediate kick
+that shrink_boosted_slice_remote()'s comment already promises for that
+case; the gentle affinitized-task shrink path intentionally stays
+IPI-free.
+
+A --no-preempt-kick opt-out preserves the previous behavior for
+platforms where IPI cost outweighs the wakeup-latency benefit (the
+original concern documented in ask_cpu_yield_after()).
+
+Measured (n=5 unless stated, Welch):
+- interactive harness (6 hogs + schbench, 4c/8t cpuset): schbench wake
+  p99 6526us -> 4262us (-35%, p=0.001)
+- real 4c/8t machine (24 CPUs offlined): vkmark 1%-low fps +10.8%
+  (p=0.009); wake p99 and messaging unregressed
+- hackbench -g8 -l10000 (n=10): 25.84 +/- 0.29 vs 25.54 +/- 0.37 (n.s.)
+- fork-storm wake p99 (n=6): unchanged (73-89us)
+
+Scope note: this makes granted preemptions effective; it does not close
+all of issue #3119 — with large slices on the 32-CPU repro a residual
+~5ms tail remains while ~3k preemptions/s already fire, pointing at a
+separate (likely waker-side) mechanism still to be root-caused.

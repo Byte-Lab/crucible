@@ -1,0 +1,145 @@
+diff --git a/scheds/rust/scx_lavd/src/bpf/lavd.bpf.h b/scheds/rust/scx_lavd/src/bpf/lavd.bpf.h
+index a9f6214a..8b835fa0 100644
+--- a/scheds/rust/scx_lavd/src/bpf/lavd.bpf.h
++++ b/scheds/rust/scx_lavd/src/bpf/lavd.bpf.h
+@@ -554,6 +554,7 @@ extern const volatile u8	cpu_turbo[LAVD_CPU_ID_MAX];
+ /* Logging helpers. */
+ 
+ extern const volatile bool	no_wake_sync;
++extern const volatile bool	no_preempt_kick;
+ extern const volatile bool	no_slice_boost;
+ extern const volatile u8	verbose;
+ 
+diff --git a/scheds/rust/scx_lavd/src/bpf/preempt.bpf.c b/scheds/rust/scx_lavd/src/bpf/preempt.bpf.c
+index ce51f0c2..597a9dfb 100644
+--- a/scheds/rust/scx_lavd/src/bpf/preempt.bpf.c
++++ b/scheds/rust/scx_lavd/src/bpf/preempt.bpf.c
+@@ -190,8 +190,10 @@ null_out:
+ 	return NULL;
+ }
+ 
+-static void ask_cpu_yield_after(struct cpu_ctx *victim_cpuc, u64 new_slice)
++static bool ask_cpu_yield_after(struct cpu_ctx *victim_cpuc, u64 new_slice)
+ {
++	bool won = false;
++
+ 	bpf_rcu_read_lock();
+ 	/*
+ 	 * Note that we avoid using scx_bpf_kick_cpu() on purpose.
+@@ -202,6 +204,13 @@ static void ask_cpu_yield_after(struct cpu_ctx *victim_cpuc, u64 new_slice)
+ 	 * processors. Thus, let's avoid using the IPI, scx_bpf_kick_cpu(), and
+ 	 * set the victim task's time slice to zero so the victim task yields
+ 	 * the CPU in the next scheduling point.
++	 *
++	 * The return value tells the caller whether this CPU won the race to
++	 * preempt the victim (see the est_stopping_clk CAS below), so the
++	 * caller can decide to escalate to a real kick. A CPU-bound victim
++	 * that never blocks has no voluntary scheduling point, so the
++	 * shortened slice alone only takes effect at the next tick -- up to
++	 * a full tick after the decision.
+ 	 */
+ 	struct task_struct *victim_p = __COMPAT_scx_bpf_cpu_curr(victim_cpuc->cpu_id);
+ 
+@@ -227,7 +236,7 @@ static void ask_cpu_yield_after(struct cpu_ctx *victim_cpuc, u64 new_slice)
+ 		u64 old = victim_cpuc->est_stopping_clk;
+ 		if (!old) {
+ 			bpf_rcu_read_unlock();
+-			return;
++			return false;
+ 		}
+ 
+ 		/*
+@@ -240,14 +249,17 @@ static void ask_cpu_yield_after(struct cpu_ctx *victim_cpuc, u64 new_slice)
+ 		if (new_slice == 1) {
+ 			bool ret = __sync_bool_compare_and_swap(
+ 				&victim_cpuc->est_stopping_clk, old, 0);
+-			if (ret)
++			if (ret) {
+ 				WRITE_ONCE(victim_p->scx.slice, new_slice);
++				won = true;
++			}
+ 		} else {
+ 			if (victim_p->scx.slice > new_slice)
+ 				WRITE_ONCE(victim_p->scx.slice, new_slice);
+ 		}
+ 	}
+ 	bpf_rcu_read_unlock();
++	return won;
+ }
+ 
+ __hidden
+@@ -425,7 +437,22 @@ void try_find_and_kick_victim_cpu(struct task_struct *p,
+ 	 */
+ 	if (cpuc_victim) {
+ kick_out:
+-		ask_cpu_yield_after(cpuc_victim, new_slice_wall);
++		;
++		/*
++		 * If we won the victim, escalate the slice shrink with a real
++		 * preemption kick. The soft yield alone relies on the victim
++		 * reaching a scheduling point; a tight-loop CPU-bound victim
++		 * only does so at the next tick, so without the IPI a
++		 * latency-critical wakeup that found no idle CPU still waits
++		 * up to a full tick (measured: ~1% of wakeups wait roughly a
++		 * slice under 1.6x oversubscription because the shortened
++		 * slice never takes effect in time). The IPI cost is bounded:
++		 * this path is already gated by thr_lat_cri (top preemptible
++		 * fraction) and by winning the per-victim CAS race.
++		 */
++		bool won = ask_cpu_yield_after(cpuc_victim, new_slice_wall);
++		if (won && !no_preempt_kick)
++			scx_bpf_kick_cpu(cpuc_victim->cpu_id, SCX_KICK_PREEMPT);
+ 
+ 		if (cpuc_cur || (cpuc_cur = get_cpu_ctx()))
+ 			cpuc_cur->nr_preempt++;
+diff --git a/scheds/rust/scx_lavd/src/bpf/util.bpf.c b/scheds/rust/scx_lavd/src/bpf/util.bpf.c
+index 65a7e99e..d964d562 100644
+--- a/scheds/rust/scx_lavd/src/bpf/util.bpf.c
++++ b/scheds/rust/scx_lavd/src/bpf/util.bpf.c
+@@ -41,6 +41,7 @@ volatile bool		no_core_compaction;
+ volatile bool		no_freq_scaling;
+ 
+ const volatile bool	no_wake_sync;
++const volatile bool	no_preempt_kick;
+ const volatile bool	no_slice_boost;
+ const volatile bool	per_cpu_dsq;
+ const volatile bool	enable_cpu_bw;
+diff --git a/scheds/rust/scx_lavd/src/bpf/util.bpf.h b/scheds/rust/scx_lavd/src/bpf/util.bpf.h
+index c8c1840c..a39186a5 100644
+--- a/scheds/rust/scx_lavd/src/bpf/util.bpf.h
++++ b/scheds/rust/scx_lavd/src/bpf/util.bpf.h
+@@ -16,6 +16,7 @@ extern volatile bool		no_core_compaction;
+ extern volatile bool		no_freq_scaling;
+ 
+ extern const volatile bool	no_wake_sync;
++extern const volatile bool	no_preempt_kick;
+ extern const volatile bool	no_slice_boost;
+ extern const volatile bool	per_cpu_dsq;
+ extern const volatile bool	enable_cpu_bw;
+diff --git a/scheds/rust/scx_lavd/src/main.rs b/scheds/rust/scx_lavd/src/main.rs
+index 5d06a230..fcae08ea 100644
+--- a/scheds/rust/scx_lavd/src/main.rs
++++ b/scheds/rust/scx_lavd/src/main.rs
+@@ -208,6 +208,14 @@ struct Opts {
+     #[clap(long = "no-wake-sync", action = clap::ArgAction::SetTrue)]
+     no_wake_sync: bool,
+ 
++    /// Disable escalating a won preemption to an immediate kick (IPI). By
++    /// default, when a latency-critical enqueue wins a preemption victim, the
++    /// victim CPU is kicked so a CPU-bound victim is evicted immediately
++    /// instead of at its next tick. Disable on platforms where IPI cost
++    /// outweighs the wakeup-latency benefit.
++    #[clap(long = "no-preempt-kick", action = clap::ArgAction::SetTrue)]
++    no_preempt_kick: bool,
++
+     /// Disable dynamic slice boost for long-running tasks.
+     #[clap(long = "no-slice-boost", action = clap::ArgAction::SetTrue)]
+     no_slice_boost: bool,
+@@ -697,6 +705,7 @@ impl<'a> Scheduler<'a> {
+         rodata.no_use_em = opts.no_use_em as u8;
+         rodata.no_fast_lb = opts.no_fast_lb as u8;
+         rodata.no_wake_sync = opts.no_wake_sync;
++        rodata.no_preempt_kick = opts.no_preempt_kick;
+         rodata.no_slice_boost = opts.no_slice_boost;
+         rodata.per_cpu_dsq = opts.per_cpu_dsq;
+         rodata.enable_cpu_bw = opts.enable_cpu_bw;

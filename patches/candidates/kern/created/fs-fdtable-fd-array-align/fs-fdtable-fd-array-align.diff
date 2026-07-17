@@ -1,0 +1,21 @@
+diff --git a/include/linux/fdtable.h b/include/linux/fdtable.h
+index c45306a9f007..1c3480a015d2 100644
+--- a/include/linux/fdtable.h
++++ b/include/linux/fdtable.h
+@@ -53,7 +53,15 @@ struct files_struct {
+ 	unsigned long close_on_exec_init[1];
+ 	unsigned long open_fds_init[1];
+ 	unsigned long full_fds_bits_init[1];
+-	struct file __rcu * fd_array[NR_OPEN_DEFAULT];
++  /*
++   * Until the fdtable is first expanded, fdt->fd points at this
++   * array, so __fget_files_rcu() reads its slots on every syscall
++   * that takes an fd. Keep it out of the written line above: the
++   * first few slots would otherwise share a cache line with
++   * file_lock/next_fd/open_fds and bounce on every open()/close()
++   * done by other threads.
++   */
++	struct file __rcu *fd_array[NR_OPEN_DEFAULT] ____cacheline_aligned_in_smp;
+ };
+ 
+ struct file_operations;

@@ -1,0 +1,59 @@
+diff --git a/scheds/rust/scx_lavd/src/bpf/lat_cri.bpf.c b/scheds/rust/scx_lavd/src/bpf/lat_cri.bpf.c
+index 005389e2..b76b25f5 100644
+--- a/scheds/rust/scx_lavd/src/bpf/lat_cri.bpf.c
++++ b/scheds/rust/scx_lavd/src/bpf/lat_cri.bpf.c
+@@ -346,18 +346,47 @@ static u64 calc_virtual_deadline_delta(struct task_struct *p,
+ 	return deadline >> LAVD_SHIFT;
+ }
+ 
++static u64 calc_compete_window(void)
++{
++	u64 nr_q = sys_stat.nr_queued_task;
++	u64 nr_a = max(sys_stat.nr_active, 1);
++
++	/*
++	 * The compete window controls the deadline-aging regime. It is
++	 * applied uniformly to every enqueued task, so it does not itself
++	 * prefer one task over another; what it changes is whether
++	 * lat_cri-driven deadline deltas or queue aging dominates the
++	 * ordering (see below). With the window in force, a low-dl_delta
++	 * (latency-critical) wakeup beats queue veterans -- a crude
++	 * analogue of wakeup preemption at the deadline layer.
++	 *
++	 * The head start is only affordable while the system can still
++	 * serve everyone promptly. Whenever the deadline delta is smaller
++	 * than the window, the enqueued deadline lands behind
++	 * cur_logical_clk, the clock cannot advance, and deadline aging is
++	 * effectively disabled. With few queued tasks that is harmless --
++	 * nobody waits long anyway -- and the window's wakeup preference is
++	 * what keeps interactive tasks responsive next to CPU hogs. But
++	 * under heavy oversubscription (nr_queued >> nr_active, e.g., a
++	 * hackbench ring), disabling aging starves whichever task the
++	 * pipeline is currently blocked on and serializes the workload.
++	 *
++	 * Hence, shrink the window proportionally to the oversubscription
++	 * ratio: full window while the queue fits the active CPUs, scaled
++	 * by nr_active/nr_queued beyond that so aging resumes as the
++	 * backlog grows.
++	 */
++	if (nr_q > nr_a)
++		return (LAVD_DL_COMPETE_WINDOW * nr_a) / nr_q;
++	return LAVD_DL_COMPETE_WINDOW;
++}
++
+ __hidden
+ u64 calc_when_to_run(struct task_struct *p, task_ctx *taskc)
+ {
+ 	u64 dl_delta, clc;
+ 
+-	/*
+-	 * Before enqueueing a task to a run queue, we should decide when a
+-	 * task should be scheduled. We start from -LAVD_DL_COMPETE_WINDOW
+-	 * so that the current task can compete against the already enqueued
+-	 * tasks within [-LAVD_DL_COMPETE_WINDOW, 0].
+-	 */
+ 	dl_delta = calc_virtual_deadline_delta(p, taskc);
+-	clc = READ_ONCE(cur_logical_clk) - LAVD_DL_COMPETE_WINDOW;
++	clc = READ_ONCE(cur_logical_clk) - calc_compete_window();
+ 	return clc + dl_delta;
+ }

@@ -1,0 +1,221 @@
+#!/usr/bin/env python3
+"""patchctl - inspect and manage the Crucible upstream patch candidates.
+
+Layout: candidates/{kern,scx}/{created,sent,merged,rejected}/<slug>/
+Each patch dir contains SCORECARD.md with YAML-ish frontmatter.
+
+Usage:
+  patchctl [list] [filters]        table of patches, kern and scx split
+  patchctl summary                 counts by class/tier/state
+  patchctl path      [filters]     print patch directory path(s)
+  patchctl evidence  [filters]     print EVIDENCE.md of matching patch(es)
+  patchctl scorecard [filters]     print SCORECARD.md of matching patch(es)
+  patchctl show      <slug>        scorecard + file listing for one patch
+  patchctl move      <slug> <state>  move patch to created|sent|merged|rejected
+                                     (updates scorecard state field too)
+
+Filters:
+  -c/--class kern|scx      restrict to one class (default: both)
+  -t/--tier  1|2|3|TIER_1... restrict to tier(s), repeatable
+  -s/--state created|sent|merged|rejected  restrict to state(s), repeatable
+  <slug-substring>         positional; substring-match against slug
+"""
+
+import re
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parent
+CLASSES = ("kern", "scx")
+STATES = ("created", "sent", "merged", "rejected")
+TIER_ORDER = {"TIER_1": 0, "TIER_2": 1, "TIER_3": 2, "?": 3}
+
+
+def parse_scorecard(path):
+    meta = {}
+    try:
+        text = path.read_text()
+    except OSError:
+        return meta
+    m = re.match(r"\s*---\n(.*?)\n---", text, re.S)
+    if not m:
+        return meta
+    for line in m.group(1).splitlines():
+        if ":" not in line:
+            continue
+        k, v = line.split(":", 1)
+        meta[k.strip()] = v.strip().strip('"')
+    return meta
+
+
+def discover():
+    patches = []
+    for cls in CLASSES:
+        for state in STATES:
+            d = ROOT / cls / state
+            if not d.is_dir():
+                continue
+            for p in sorted(d.iterdir()):
+                if not p.is_dir():
+                    continue
+                meta = parse_scorecard(p / "SCORECARD.md")
+                patches.append({
+                    "slug": p.name,
+                    "class": cls,
+                    "state": state,
+                    "tier": meta.get("tier", "?"),
+                    "title": meta.get("title", "(no scorecard)"),
+                    "created": meta.get("created", "?"),
+                    "target": meta.get("target", "?"),
+                    "review": meta.get("review_status", "?"),
+                    "dir": p,
+                })
+    return patches
+
+
+def norm_tier(t):
+    t = t.upper().replace("TIER_", "").replace("T", "")
+    return f"TIER_{t}" if t in ("1", "2", "3") else t
+
+
+def apply_filters(patches, args):
+    cls = None
+    tiers, states, slugs = [], [], []
+    it = iter(args)
+    for a in it:
+        if a in ("-c", "--class"):
+            cls = next(it, None)
+        elif a in ("-t", "--tier"):
+            tiers.append(norm_tier(next(it, "")))
+        elif a in ("-s", "--state"):
+            states.append(next(it, ""))
+        elif a.startswith("-"):
+            sys.exit(f"unknown flag: {a}")
+        else:
+            slugs.append(a)
+    out = patches
+    if cls:
+        out = [p for p in out if p["class"] == cls]
+    if tiers:
+        out = [p for p in out if p["tier"] in tiers]
+    if states:
+        out = [p for p in out if p["state"] in states]
+    if slugs:
+        out = [p for p in out if any(s in p["slug"] for s in slugs)]
+    return out
+
+
+def sort_key(p):
+    return (TIER_ORDER.get(p["tier"], 9), p["slug"])
+
+
+def cmd_list(patches):
+    for cls in CLASSES:
+        rows = sorted((p for p in patches if p["class"] == cls), key=sort_key)
+        if not rows:
+            continue
+        print(f"\n=== {cls.upper()} ({len(rows)}) ===")
+        w = max(len(p["slug"]) for p in rows) + 2
+        for p in rows:
+            print(f"  {p['slug']:<{w}} {p['tier']:<7} {p['state']:<9} {p['title']}")
+    print()
+
+
+def cmd_summary(patches):
+    print(f"total: {len(patches)}")
+    for cls in CLASSES:
+        rows = [p for p in patches if p["class"] == cls]
+        if not rows:
+            continue
+        tiers = {}
+        states = {}
+        for p in rows:
+            tiers[p["tier"]] = tiers.get(p["tier"], 0) + 1
+            states[p["state"]] = states.get(p["state"], 0) + 1
+        tier_s = " ".join(f"{k}={v}" for k, v in sorted(tiers.items()))
+        state_s = " ".join(f"{k}={v}" for k, v in sorted(states.items()))
+        print(f"  {cls}: {len(rows)}  [{tier_s}]  [{state_s}]")
+
+
+def cmd_path(patches):
+    for p in sorted(patches, key=sort_key):
+        print(p["dir"])
+
+
+def _cat(patches, pattern, label):
+    hit = False
+    for p in sorted(patches, key=sort_key):
+        for f in sorted(p["dir"].glob(pattern)):
+            print(f"\n{'=' * 72}\n== {p['slug']} ({p['class']}/{p['state']}, {p['tier']}) - {f.name}\n{'=' * 72}")
+            print(f.read_text())
+            hit = True
+    if not hit:
+        print(f"no {label} found for selection", file=sys.stderr)
+
+
+def cmd_show(patches):
+    if len(patches) != 1:
+        sys.exit(f"show needs exactly one patch (matched {len(patches)}); refine the slug")
+    p = patches[0]
+    sc = p["dir"] / "SCORECARD.md"
+    if sc.exists():
+        print(sc.read_text())
+    print(f"--- files in {p['dir']} ---")
+    for f in sorted(p["dir"].rglob("*")):
+        if f.is_file():
+            print(f"  {f.relative_to(p['dir'])}  ({f.stat().st_size} bytes)")
+
+
+def cmd_move(patches, new_state):
+    if new_state not in STATES:
+        sys.exit(f"state must be one of {STATES}")
+    if len(patches) != 1:
+        sys.exit(f"move needs exactly one patch (matched {len(patches)}); refine the slug")
+    p = patches[0]
+    dst = ROOT / p["class"] / new_state / p["slug"]
+    if dst.exists():
+        sys.exit(f"destination exists: {dst}")
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    p["dir"].rename(dst)
+    sc = dst / "SCORECARD.md"
+    if sc.exists():
+        text = sc.read_text()
+        text = re.sub(r"^state:.*$", f"state: {new_state}", text, count=1, flags=re.M)
+        sc.write_text(text)
+    print(f"{p['slug']}: {p['state']} -> {new_state}  ({dst})")
+
+
+def main():
+    args = sys.argv[1:]
+    cmd = "list"
+    if args and args[0] in ("list", "summary", "path", "evidence", "scorecard", "show", "move", "-h", "--help", "help"):
+        cmd = args.pop(0)
+    if cmd in ("-h", "--help", "help"):
+        print(__doc__)
+        return
+    move_state = None
+    if cmd == "move":
+        if len(args) < 2:
+            sys.exit("usage: patchctl move <slug> <state>")
+        move_state = args.pop()
+    patches = apply_filters(discover(), args)
+    if not patches and cmd != "summary":
+        sys.exit("no patches match")
+    if cmd == "list":
+        cmd_list(patches)
+    elif cmd == "summary":
+        cmd_summary(patches)
+    elif cmd == "path":
+        cmd_path(patches)
+    elif cmd == "evidence":
+        _cat(patches, "*EVIDENCE.md", "EVIDENCE.md")
+    elif cmd == "scorecard":
+        _cat(patches, "SCORECARD.md", "SCORECARD.md")
+    elif cmd == "show":
+        cmd_show(patches)
+    elif cmd == "move":
+        cmd_move(patches, move_state)
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,205 @@
+=================================================
+            Trace Event Information              
+=================================================
+  Total records                     :     939747
+  Locked Load/Store Operations      :        409
+  Load Operations                   :     300812
+  Loads - uncacheable               :          0
+  Loads - IO                        :          0
+  Loads - Miss                      :          0
+  Loads - no mapping                :      19554
+  Load Fill Buffer Hit              :          0
+  Load L1D hit                      :     215205
+  Load L2D hit                      :      12380
+  Load LLC hit                      :      40884
+  Load Local HITM                   :       8823
+  Load Remote HITM                  :         43
+  Load Remote HIT                   :          0
+  Load Local DRAM                   :         29
+  Load Remote DRAM                  :          0
+  Load MESI State Exclusive         :         29
+  Load MESI State Shared            :          0
+  Load LLC Misses                   :         72
+  Load access blocked by data       :          0
+  Load access blocked by address    :          0
+  Load HIT Local Peer               :          0
+  Load HIT Remote Peer              :          0
+  LLC Misses to Local DRAM          :       40.3%
+  LLC Misses to Remote DRAM         :        0.0%
+  LLC Misses to Remote cache (HIT)  :        0.0%
+  LLC Misses to Remote cache (HITM) :       59.7%
+  Store Operations                  :      50543
+  Store - uncacheable               :          0
+  Store - no mapping                :      33194
+  Store L1D Hit                     :      14047
+  Store L1D Miss                    :          0
+  Store No available memory level   :        176
+  No Page Map Rejects               :        361
+  Unable to parse data source       :     588392
+
+=================================================
+    Global Shared Cache Line Event Information   
+=================================================
+  Total Shared Cache Lines          :         18
+  Load HITs on shared lines         :     210737
+  Fill Buffer Hits on shared lines  :          0
+  L1D hits on shared lines          :     156912
+  L2D hits on shared lines          :        160
+  LLC hits on shared lines          :      40879
+  Load hits on peer cache or nodes  :          0
+  Locked Access on shared lines     :        408
+  Blocked Access on shared lines    :          0
+  Store HITs on shared lines        :        545
+  Store L1D hits on shared lines    :        362
+  Store No available memory level   :        173
+  Total Merged records              :       9411
+
+=================================================
+                 c2c details                     
+=================================================
+  Events                            : ibs_op//
+  Cachelines sort on                : Total HITMs
+  Cacheline data grouping           : offset,pid,iaddr
+
+=================================================
+           Shared Data Cache Line Table          
+=================================================
+#
+#        ----------- Cacheline ----------      Tot  ------- Load Hitm -------    Total    Total    Total  --------- Stores --------  ----- Core Load Hit -----  - LLC Load Hit --  - RMT Load Hit --  --- Load Dram ----
+# Index             Address  Node  PA cnt     Hitm    Total  LclHitm  RmtHitm  records    Loads   Stores    L1Hit   L1Miss      N/A       FB       L1       L2    LclHit  LclHitm    RmtHit  RmtHitm       Lcl       Rmt
+# .....  ..................  ....  ......  .......  .......  .......  .......  .......  .......  .......  .......  .......  .......  .......  .......  .......  ........  .......  ........  .......  ........  ........
+#
+      0  0xffff8888f3b46380     0   12595   37.50%     3325     3325        0    37561    37161      400      327        0       73        0     6345       82     27387     3325         0        0        22         0
+      1  0xffff88969cf34500     0     297    7.24%      642      642        0    19986    19970       16        3        0       13        0    18708       12       608      642         0        0         0         0
+      2  0xffff88969cfb4500     0     345    7.11%      630      630        0    19884    19870       17        4        0       10        0    18659        6       575      630         0        0         0         0
+      3  0xffff88969ceb4500     0     331    7.06%      626      626        0    20333    20318       16        2        0       13        0    19119        7       566      626         0        0         0         0
+      4  0xffff88969ce34500     0     309    6.96%      617      617        0    20364    20351       15        2        0       11        0    19141        7       586      617         0        0         0         0
+      5  0xffff88969d0b4500     0     285    6.76%      599      599        0    20002    19988       15        3        0       11        0    18774        7       608      599         0        0         0         0
+      6  0xffff88969d134500     0     335    6.74%      598      598        0    19893    19884       10        3        0        6        0    18703       18       565      598         0        0         0         0
+      7  0xffff88969d034500     0     321    6.72%      596      596        0    19860    19848       12        1        0       11        0    18660       10       582      596         0        0         0         0
+      8  0xffff88969d1b4500     0     325    6.68%      592      592        0    19862    19846       18        2        0       14        0    18669       11       574      592         0        0         0         0
+      9  0xffff8887c0806d40     0       1    5.38%      477      477        0      582      582        0        0        0        0        0      105        0         0      477         0        0         0         0
+     10  0xffff888c57b53f40     0       1    1.76%      156      113       43      167      167        0        0        0        0        0        5        0         0      113         0       43         6         0
+
+=================================================
+      Shared Cache Line Distribution Pareto      
+=================================================
+#
+#        ----- HITM -----  ------- Store Refs ------  --------- Data address ---------                               ---------- cycles ----------    Total       cpu                                             Shared                                      
+#   Num  RmtHitm  LclHitm   L1 Hit  L1 Miss      N/A              Offset  Node  PA cnt      Pid        Code address  rmt hitm  lcl hitm      load  records       cnt                          Symbol             Object                     Source:Line  Node
+# .....  .......  .......  .......  .......  .......  ..................  ....  ......  .......  ..................  ........  ........  ........  .......  ........  ..............................  .................  ..............................  ....
+#
+  ----------------------------------------------------------------------
+      0        0     3325      327        0       73  0xffff8888f3b46380
+  ----------------------------------------------------------------------
+           0.00%   99.01%    0.00%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff8712dd34         0       429        88     6673         8  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.15%    0.00%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff8712dbe4         0       627      1184        9         5  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.12%    0.00%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff8712d7e3         0       514         0        4         3  [k] _raw_spin_lock              [kernel.kallsyms]  _raw_spin_lock+19                0
+           0.00%    0.00%    0.31%    0.00%   19.18%                 0x0     0       1  2123661  0xffffffff8712d989         0         0         0       15         5  [k] _raw_spin_unlock            [kernel.kallsyms]  _raw_spin_unlock+9               0
+           0.00%    0.00%   99.69%    0.00%   80.82%                 0x0     0       1  2123661  0xffffffff8712dd44         0         0         0      385         8  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.33%    0.00%    0.00%    0.00%                 0x2     0       1  2123661  0xffffffff8712dd1d         0       510       751       15         5  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.09%    0.00%    0.00%    0.00%                 0x8     0       1  2123661  0xffffffff86315468         0       324        28       10         7  [k] do_dup2                     [kernel.kallsyms]  do_dup2+120                      0
+           0.00%    0.15%    0.00%    0.00%    0.00%                0x10     0       1  2123661  0xffffffff863154e3         0       877       226        8         5  [k] do_dup2                     [kernel.kallsyms]  do_dup2+243                      0
+           0.00%    0.06%    0.00%    0.00%    0.00%                0x10     0       1  2123661  0xffffffff86316afe         0       562       449        6         3  [k] file_close_fd_locked        [kernel.kallsyms]  file_close_fd_locked+62          0
+           0.00%    0.03%    0.00%    0.00%    0.00%                0x10     0       1  2123661  0xffffffff86315457         0       422       218        7         6  [k] do_dup2                     [kernel.kallsyms]  do_dup2+103                      0
+           0.00%    0.03%    0.00%    0.00%    0.00%                0x10     0       1  2123661  0xffffffff8631547f         0       478         0       23         5  [k] do_dup2                     [kernel.kallsyms]  do_dup2+143                      0
+           0.00%    0.03%    0.00%    0.00%    0.00%                0x18     0       1  2123661  0xffffffff86316b0b         0       837         0        3         3  [k] file_close_fd_locked        [kernel.kallsyms]  file_close_fd_locked+75          0
+
+  ----------------------------------------------------------------------
+      1        0      642        3        0       13  0xffff88969cf34500
+  ----------------------------------------------------------------------
+           0.00%    1.09%    0.00%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff8712ddc4         0         4         0        7         5  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%   33.33%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff8712dbdd         0         0         0        1         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%    0.00%    0.00%    7.69%                 0x0     0       1  2123661  0xffffffff8712dda5         0         0         0        1         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%   98.91%    0.00%    0.00%    0.00%                 0x8     0       1  2123661  0xffffffff8712ddb1         0        89         2    19820         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%   66.67%    0.00%    0.00%                 0x8     0       1  2123661  0xffffffff8712dbd6         0         0         0        2         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%    0.00%    0.00%   92.31%                 0x8     0       1  2123661  0xffffffff8712dd4c         0         0         0       12         4  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+
+  ----------------------------------------------------------------------
+      2        0      630        4        0       10  0xffff88969cfb4500
+  ----------------------------------------------------------------------
+           0.00%    0.95%    0.00%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff8712ddc4         0         4         0        6         4  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%   25.00%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff8712dbdd         0         0         0        1         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%    0.00%    0.00%   10.00%                 0x0     0       1  2123661  0xffffffff8712dda5         0         0         0        1         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%   99.05%    0.00%    0.00%    0.00%                 0x8     0       1  2123661  0xffffffff8712ddb1         0        88         2    19700         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%   75.00%    0.00%    0.00%                 0x8     0       1  2123661  0xffffffff8712dbd6         0         0         0        3         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%    0.00%    0.00%   90.00%                 0x8     0       1  2123661  0xffffffff8712dd4c         0         0         0        9         5  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%    0.00%    0.00%    0.00%                 0xc     0       1  2123661  0xffffffff8712dba4         0         0         0        0         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+
+  ----------------------------------------------------------------------
+      3        0      626        2        0       13  0xffff88969ceb4500
+  ----------------------------------------------------------------------
+           0.00%    1.28%    0.00%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff8712ddc4         0         4         0        8         5  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%   50.00%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff8712dbdd         0         0         0        1         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%    0.00%    0.00%    7.69%                 0x0     0       1  2123661  0xffffffff8712dda5         0         0         0        1         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%   98.72%    0.00%    0.00%    0.00%                 0x8     0       1  2123661  0xffffffff8712ddb1         0        92         2    20152         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%   50.00%    0.00%    0.00%                 0x8     0       1  2123661  0xffffffff8712dbd6         0         0         0        1         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%    0.00%    0.00%   92.31%                 0x8     0       1  2123661  0xffffffff8712dd4c         0         0         0       12         6  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%    0.00%    0.00%    0.00%                 0xc     0       1  2123661  0xffffffff8712dba4         0         0         0        0         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+
+  ----------------------------------------------------------------------
+      4        0      617        2        0       11  0xffff88969ce34500
+  ----------------------------------------------------------------------
+           0.00%    1.94%    0.00%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff8712ddc4         0         4         0       12         5  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%   50.00%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff8712dbdd         0         0         0        1         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%    0.00%    0.00%    9.09%                 0x0     0       1  2123661  0xffffffff8712dda5         0         0         0        1         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%   98.06%    0.00%    0.00%    0.00%                 0x8     0       1  2123661  0xffffffff8712ddb1         0        87         2    20197         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%   50.00%    0.00%    0.00%                 0x8     0       1  2123661  0xffffffff8712dbd6         0         0         0        1         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%    0.00%    0.00%   90.91%                 0x8     0       1  2123661  0xffffffff8712dd4c         0         0         0       10         5  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%    0.00%    0.00%    0.00%                 0xc     0       1  2123661  0xffffffff8712dba4         0         0         0        0         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+
+  ----------------------------------------------------------------------
+      5        0      599        3        0       11  0xffff88969d0b4500
+  ----------------------------------------------------------------------
+           0.00%    1.34%    0.00%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff8712ddc4         0         4         0        8         5  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%   98.66%    0.00%    0.00%    0.00%                 0x8     0       1  2123661  0xffffffff8712ddb1         0        88         2    19844         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%   66.67%    0.00%    0.00%                 0x8     0       1  2123661  0xffffffff8712dbd6         0         0         0        2         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%   33.33%    0.00%  100.00%                 0x8     0       1  2123661  0xffffffff8712dd4c         0         0         0       12         7  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%    0.00%    0.00%    0.00%                 0xc     0       1  2123661  0xffffffff8712dba4         0         0         0        0         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+
+  ----------------------------------------------------------------------
+      6        0      598        3        0        6  0xffff88969d134500
+  ----------------------------------------------------------------------
+           0.00%    1.17%    0.00%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff8712ddc4         0         4         0        7         4  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%   66.67%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff8712dbdd         0         0         0        2         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%   98.83%    0.00%    0.00%    0.00%                 0x8     0       1  2123661  0xffffffff8712ddb1         0        86         2    19714         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%   33.33%    0.00%    0.00%                 0x8     0       1  2123661  0xffffffff8712dbd6         0         0         0        1         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%    0.00%    0.00%  100.00%                 0x8     0       1  2123661  0xffffffff8712dd4c         0         0         0        6         4  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%    0.00%    0.00%    0.00%                 0xc     0       1  2123661  0xffffffff8712dba4         0         0         0        0         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+
+  ----------------------------------------------------------------------
+      7        0      596        1        0       11  0xffff88969d034500
+  ----------------------------------------------------------------------
+           0.00%    1.17%    0.00%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff8712ddc4         0         4         0        7         4  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%  100.00%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff8712dbdd         0         0         0        1         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%    0.00%    0.00%    9.09%                 0x0     0       1  2123661  0xffffffff8712dda5         0         0         0        1         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%   98.83%    0.00%    0.00%    0.00%                 0x8     0       1  2123661  0xffffffff8712ddb1         0        85         2    19685         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%    0.00%    0.00%   90.91%                 0x8     0       1  2123661  0xffffffff8712dd4c         0         0         0       10         4  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+
+  ----------------------------------------------------------------------
+      8        0      592        2        0       14  0xffff88969d1b4500
+  ----------------------------------------------------------------------
+           0.00%    0.84%    0.00%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff8712ddc4         0         4         0        5         4  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%   50.00%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff8712dbdd         0         0         0        1         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%    0.00%    0.00%   21.43%                 0x0     0       1  2123661  0xffffffff8712dda5         0         0         0        3         3  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%   99.16%    0.00%    0.00%    0.00%                 0x8     0       1  2123661  0xffffffff8712ddb1         0        90         2    19688         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%   50.00%    0.00%   78.57%                 0x8     0       1  2123661  0xffffffff8712dd4c         0         0         0       12         4  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+           0.00%    0.00%    0.00%    0.00%    0.00%                 0xc     0       1  2123661  0xffffffff8712dba4         0         0         0        0         1  [k] native_queued_spin_lock_sl  [kernel.kallsyms]  native_queued_spin_lock_slowpa   0
+
+  ----------------------------------------------------------------------
+      9        0      477        0        0        0  0xffff8887c0806d40
+  ----------------------------------------------------------------------
+           0.00%   61.01%    0.00%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff866cf130         0       119         0      291         8  [k] lockref_get_not_zero  [kernel.kallsyms]  lockref_get_not_zero+0    0
+           0.00%   19.71%    0.00%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff866cf157         0       101         0       94         8  [k] lockref_get_not_zero  [kernel.kallsyms]  lockref_get_not_zero+39   0
+           0.00%   11.95%    0.00%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff866cf207         0       147         0      131         8  [k] lockref_put_return    [kernel.kallsyms]  lockref_put_return+39     0
+           0.00%    7.34%    0.00%    0.00%    0.00%                 0x0     0       1  2123661  0xffffffff866cf1e0         0       124         0       66         8  [k] lockref_put_return    [kernel.kallsyms]  lockref_put_return+0      0
+
+  ----------------------------------------------------------------------
+     10       43      113        0        0        0  0xffff888c57b53f40
+  ----------------------------------------------------------------------
+          41.86%   76.11%    0.00%    0.00%    0.00%                0x30     0       1  2123661  0xffffffff862e4afe       847       452       996      110         8  [k] fput             [kernel.kallsyms]  fput+30              0
+           2.33%   16.81%    0.00%    0.00%    0.00%                0x30     0       1  2123661  0xffffffff86315910       633       504       816       21         7  [k] fdget            [kernel.kallsyms]  fdget+160            0
+          20.93%    4.42%    0.00%    0.00%    0.00%                0x30     0       1  2123661  0xffffffff862e56be       902      1495         0       14         7  [k] fput_close_sync  [kernel.kallsyms]  fput_close_sync+94   0
+          16.28%    1.77%    0.00%    0.00%    0.00%                0x30     0       1  2123661  0xffffffff8631543a       682       658         0       10         7  [k] do_dup2          [kernel.kallsyms]  do_dup2+74           0
+          16.28%    0.88%    0.00%    0.00%    0.00%                0x30     0       1  2123661  0xffffffff862e578e       837       127         0        9         5  [k] fput_close       [kernel.kallsyms]  fput_close+94        0
+           2.33%    0.00%    0.00%    0.00%    0.00%                0x30     0       1  2123661  0xffffffff862e5747       326         0       298        3         4  [k] fput_close       [kernel.kallsyms]  fput_close+23        0
