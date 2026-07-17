@@ -1,0 +1,106 @@
+sched/fair: Add SIS_PREFER_CORE to prefer fully idle cores on wakeup
+
+[RFC note for below the "---" cut when posting: the benefit and cost
+data below are from a handheld-class part and a virtualized multi-LLC
+guest; bare-metal multi-LLC data beyond what is listed is explicitly
+requested from reviewers with access to bigger iron. Suggested CC
+beyond get_maintainer: Andrea Righi, K Prateek Nayak, Chen Yu,
+Shrikanth Hegde.]
+
+select_idle_sibling() returns the wakeup target (or prev/recent_used
+CPU) as soon as it is idle, before the LLC is checked for fully idle
+cores. On an SMT system this can park a wakee on an idle sibling of a
+busy core while a whole idle core sits in the same LLC: the wakee then
+runs SMT-degraded, and -- worse -- the task already running on the
+sibling loses a large fraction of its core for the duration.
+
+The asymmetric-capacity path recently became idle-core-aware in
+exactly this sense: commit 25a32e400a14 ("sched/fair: Prefer
+fully-idle SMT cores in asym-capacity idle selection") gates the same
+early bailouts on is_core_idle() under ASYM+SMT (via asym_fits_cpu()),
+with commits 61ea17a63719 ("sched/fair: Add SIS_UTIL support to
+select_idle_capacity()") and fdfe5a8cd873 ("sched/fair: Attach
+sched_domain_shared to sd_asym_cpucapacity") completing the machinery.
+The symmetric path has no equivalent: SIS_UTIL only bounds the scan
+depth of select_idle_cpu() and does nothing about the pre-scan
+bailouts.
+
+Unlike the asym change, this is not made unconditional here: on the
+symmetric path the fall-through costs a real idle-core scan plus a
+possible cross-core migration on every affected wakeup, and that has
+a measurable near-idle wake-latency cost (numbers below). Hence a
+default-off SCHED_FEAT while the cost story on larger LLCs is
+explored -- making it unconditional (or self-gating on LLC size /
+load) is the open question this RFC poses.
+
+Motivating workload, measured on a Steam Deck (Van Gogh APU, 4c/8t,
+single LLC): the Civilization VI AI benchmark is fork/join compute
+over 5 worker threads with a coordinator on the join critical path.
+In a 45s trace the coordinator ran 25.3% of its runtime with a worker
+on its SMT sibling. Attribution of the misplaced wakes (sibling-busy
+landing while a fully idle core existed, n=3682 across all Civ6
+threads): 96% landed on the wakee's previous CPU. The waker is
+on-CPU at wake time, so wake_affine() selects the wakee's idle prev
+as @target, and the *target* bailout is what returns it -- which is
+why gating the target bailout alone captures the mechanism (4%
+residual arrives via the scan/recent_used paths; prev and recent_used
+keep their stock behaviour to preserve cache-warm fast returns when
+the LLC genuinely has no whole core free).
+
+If the idle-core scan comes back with only a partially idle CPU, or
+nothing at all (stale has_idle_cores flag), fall back to the original
+cache-warm target instead of migrating for no capacity gain.
+
+Benefit, Civ6 AI benchmark on the Steam Deck (feature backported to
+the 6.16 SteamOS kernel; interleaved same-kernel A/B via the runtime
+toggle, n=6/side, Welch):
+
+  fps_avg          40.26 -> 42.24  (+4.9%, p=0.0004)
+  frametime p99 / p999 / fps 1%-low: no regression
+
+Cost, same machine, same method: schbench (1 messenger x 2 workers,
+near-idle) wake p99 rises 28us -> 38us (n=3; replicated in a second
+session, medians 29us -> 35.5us, n=8/side, same-boot interleaved
+toggle -- the first off-arm rep was a 318us warmup outlier and is
+excluded from the mean; every non-outlier off rep sits below every
+on rep)
+with the feature enabled -- the forced fall-through trades a fast
+return for an idle-core scan plus a possible cross-core migration on
+a lightly loaded LLC. At moderate load (2 messengers x 6 workers)
+the cost disappears (p99 identical): the guard self-disables once
+test_idle_cores() goes false.
+
+netperf TCP_RR on the same bare-metal machine (loopback, 1 pair,
+n=8/side, same-boot interleaved toggle): 41.9k -> 42.8k
+transactions/s with the feature on (+2.4%, not significant) -- no
+request-response regression.
+
+Multi-LLC regression guard, this patch on 7.2.0-rc3 (2-LLC SMT guest
+topology: EPYC-Genoa model, 16 CPUs = 2 dies x 4 cores x 2 threads,
+qemu confined to one otherwise-idle CCD of a Ryzen 9 7950X host;
+interleaved same-boot A/B via the runtime toggle, n=5/side, Welch;
+guest LLC pair shares one physical L3, so this is a
+scheduling-decision guard, not a bare-metal performance claim):
+
+  tbench 1/2/4 clients        -0.2% / +0.1% / -0.3%   (all ns)
+  tbench 8/16/32 clients      +1.2% / -0.5% / -0.6%   (all ns;
+                              16 CPUs, at/beyond saturation)
+  schbench low  wake p99      6.2us -> 6.8us (higher in 3/5
+                              interleaved pairs, 2 ties; 1us-bucketed
+                              n=5, two-sided p=0.067). A second
+                              guest session measured 6.8us -> 6.8us
+                              (null); pooled across both sessions
+                              the guest effect is 6.5 -> 6.8us,
+                              p=0.18 -- the near-idle cost is robust
+                              on bare metal (above) but at or below
+                              the guest's measurement floor here.
+  schbench low  req  p99      +0.1%                   (ns)
+  schbench load wake/req p99  0.0% / -0.1%            (ns)
+  hackbench msg/pipe -g4      -0.1% / -0.5%           (ns)
+  perf bench sched pipe       -7.2%                   (ns, noisy)
+
+netperf TCP_RR could not be run in the guest (getaddrinfo failure in
+the minimal guest environment); loopback request-response coverage in
+the table comes from tbench at 1 client and perf bench sched pipe.
+
+Signed-off-by: David Vernet <void@manifault.com>

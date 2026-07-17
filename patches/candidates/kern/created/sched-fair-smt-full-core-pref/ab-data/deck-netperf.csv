@@ -1,0 +1,16 @@
+RESULT,netperf,pair1,off,1,trans_per_s,39541.02
+RESULT,netperf,pair1,on,1,trans_per_s,41150.46
+RESULT,netperf,pair1,off,2,trans_per_s,41340.96
+RESULT,netperf,pair1,on,2,trans_per_s,44245.64
+RESULT,netperf,pair1,off,3,trans_per_s,42305.53
+RESULT,netperf,pair1,on,3,trans_per_s,41519.18
+RESULT,netperf,pair1,off,4,trans_per_s,42486.73
+RESULT,netperf,pair1,on,4,trans_per_s,43446.31
+RESULT,netperf,pair1,off,5,trans_per_s,42398.34
+RESULT,netperf,pair1,on,5,trans_per_s,44181.85
+RESULT,netperf,pair1,off,6,trans_per_s,42562.27
+RESULT,netperf,pair1,on,6,trans_per_s,43548.44
+RESULT,netperf,pair1,off,7,trans_per_s,40589.53
+RESULT,netperf,pair1,on,7,trans_per_s,43704.54
+RESULT,netperf,pair1,off,8,trans_per_s,43660.94
+RESULT,netperf,pair1,on,8,trans_per_s,40992.19

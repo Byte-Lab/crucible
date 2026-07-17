@@ -1,0 +1,179 @@
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+=== topology ===
+7.2.0-rc3
+16
+cpu0 L3 shared: 0-7
+cpu4 L3 shared: 0-7
+cpu8 L3 shared: 8-15
+cpu12 L3 shared: 8-15
+smt: 1
+RESULT,tbench,n1,off,1,throughput_mb,459.694
+RESULT,tbench,n2,off,1,throughput_mb,919.223
+RESULT,tbench,n4,off,1,throughput_mb,1780.73
+RESULT,tbench,n1,on,1,throughput_mb,457.615
+RESULT,tbench,n2,on,1,throughput_mb,927.872
+RESULT,tbench,n4,on,1,throughput_mb,1792.04
+RESULT,tbench,n1,off,2,throughput_mb,460.996
+RESULT,tbench,n2,off,2,throughput_mb,923.154
+RESULT,tbench,n4,off,2,throughput_mb,1779.39
+RESULT,tbench,n1,on,2,throughput_mb,461.758
+RESULT,tbench,n2,on,2,throughput_mb,919.324
+RESULT,tbench,n4,on,2,throughput_mb,1760.97
+RESULT,tbench,n1,off,3,throughput_mb,461.384
+RESULT,tbench,n2,off,3,throughput_mb,928.184
+RESULT,tbench,n4,off,3,throughput_mb,1801.62
+RESULT,tbench,n1,on,3,throughput_mb,464.381
+RESULT,tbench,n2,on,3,throughput_mb,934.777
+RESULT,tbench,n4,on,3,throughput_mb,1799.05
+RESULT,tbench,n1,off,4,throughput_mb,464.014
+RESULT,tbench,n2,off,4,throughput_mb,938.148
+RESULT,tbench,n4,off,4,throughput_mb,1800.04
+RESULT,tbench,n1,on,4,throughput_mb,466.244
+RESULT,tbench,n2,on,4,throughput_mb,938.139
+RESULT,tbench,n4,on,4,throughput_mb,1786.02
+RESULT,tbench,n1,off,5,throughput_mb,471.326
+RESULT,tbench,n2,off,5,throughput_mb,931.562
+RESULT,tbench,n4,off,5,throughput_mb,1795.01
+RESULT,tbench,n1,on,5,throughput_mb,463.118
+RESULT,tbench,n2,on,5,throughput_mb,924.272
+RESULT,tbench,n4,on,5,throughput_mb,1796.15
+Starting netserver with host 'IN(6)ADDR_ANY' port '12865' and family AF_UNSPEC
+netperf probe: resolve_host: could not resolve host '127.0.0.1' port '12865' af AF_INET
+RESULT,netperf,pair1,off,1,trans_per_s,NA
+RESULT,netperf,pair1,on,1,trans_per_s,NA
+RESULT,netperf,pair1,off,2,trans_per_s,NA
+RESULT,netperf,pair1,on,2,trans_per_s,NA
+RESULT,netperf,pair1,off,3,trans_per_s,NA
+RESULT,netperf,pair1,on,3,trans_per_s,NA
+RESULT,netperf,pair1,off,4,trans_per_s,NA
+RESULT,netperf,pair1,on,4,trans_per_s,NA
+RESULT,netperf,pair1,off,5,trans_per_s,NA
+RESULT,netperf,pair1,on,5,trans_per_s,NA
+--- schbench raw sample ---
+Wakeup Latencies percentiles (usec) runtime 10 (s) (22193 total samples)
+	  50.0th: 3          (0 samples)
+	  90.0th: 4          (9826 samples)
+	* 99.0th: 6          (930 samples)
+	  99.9th: 12         (191 samples)
+	  min=1, max=22
+Request Latencies percentiles (usec) runtime 10 (s) (22202 total samples)
+	  50.0th: 3580       (6039 samples)
+	  90.0th: 3620       (8786 samples)
+	* 99.0th: 3660       (1418 samples)
+	  99.9th: 6360       (139 samples)
+	  min=3452, max=6545
+RPS percentiles (requests) runtime 10 (s) (11 total samples)
+	  20.0th: 2220       (11 samples)
+	* 50.0th: 2220       (0 samples)
+	  90.0th: 2220       (0 samples)
+	  min=2203, max=2223
+sched delay: message 0 (usec) worker 0 (usec)
+current rps: 2218.84
+Wakeup Latencies percentiles (usec) runtime 15 (s) (33253 total samples)
+	  50.0th: 4          (14739 samples)
+	  90.0th: 4          (0 samples)
+	* 99.0th: 7          (1731 samples)
+	  99.9th: 12         (230 samples)
+	  min=1, max=22
+RESULT,schbench,low,off,1,wake_p99_us,6
+RESULT,schbench,low,off,1,req_p99_us,3660
+RESULT,schbench,load,off,1,wake_p99_us,2812
+RESULT,schbench,load,off,1,req_p99_us,29792
+RESULT,schbench,low,on,1,wake_p99_us,7
+RESULT,schbench,low,on,1,req_p99_us,3660
+RESULT,schbench,load,on,1,wake_p99_us,2812
+RESULT,schbench,load,on,1,req_p99_us,29856
+RESULT,schbench,low,off,2,wake_p99_us,6
+RESULT,schbench,low,off,2,req_p99_us,3660
+RESULT,schbench,load,off,2,wake_p99_us,2812
+RESULT,schbench,load,off,2,req_p99_us,29920
+RESULT,schbench,low,on,2,wake_p99_us,7
+RESULT,schbench,low,on,2,req_p99_us,3700
+RESULT,schbench,load,on,2,wake_p99_us,2812
+RESULT,schbench,load,on,2,req_p99_us,29728
+RESULT,schbench,low,off,3,wake_p99_us,7
+RESULT,schbench,low,off,3,req_p99_us,3660
+RESULT,schbench,load,off,3,wake_p99_us,2812
+RESULT,schbench,load,off,3,req_p99_us,29920
+RESULT,schbench,low,on,3,wake_p99_us,7
+RESULT,schbench,low,on,3,req_p99_us,3668
+RESULT,schbench,load,on,3,wake_p99_us,2812
+RESULT,schbench,load,on,3,req_p99_us,29600
+RESULT,schbench,low,off,4,wake_p99_us,6
+RESULT,schbench,low,off,4,req_p99_us,3684
+RESULT,schbench,load,off,4,wake_p99_us,2812
+RESULT,schbench,load,off,4,req_p99_us,29984
+RESULT,schbench,low,on,4,wake_p99_us,6
+RESULT,schbench,low,on,4,req_p99_us,3660
+RESULT,schbench,load,on,4,wake_p99_us,2812
+RESULT,schbench,load,on,4,req_p99_us,29984
+RESULT,schbench,low,off,5,wake_p99_us,6
+RESULT,schbench,low,off,5,req_p99_us,3676
+RESULT,schbench,load,off,5,wake_p99_us,2812
+RESULT,schbench,load,off,5,req_p99_us,29728
+RESULT,schbench,low,on,5,wake_p99_us,7
+RESULT,schbench,low,on,5,req_p99_us,3668
+RESULT,schbench,load,on,5,wake_p99_us,2812
+RESULT,schbench,load,on,5,req_p99_us,29984
+RESULT,hackbench,msg-g4,off,1,total_s,1.318
+RESULT,hackbench,pipe-g4,off,1,total_s,1.475
+RESULT,hackbench,schedpipe,off,1,total_s,1.011
+RESULT,hackbench,msg-g4,on,1,total_s,1.278
+RESULT,hackbench,pipe-g4,on,1,total_s,1.386
+RESULT,hackbench,schedpipe,on,1,total_s,1.037
+RESULT,hackbench,msg-g4,off,2,total_s,1.310
+RESULT,hackbench,pipe-g4,off,2,total_s,1.424
+RESULT,hackbench,schedpipe,off,2,total_s,1.328
+RESULT,hackbench,msg-g4,on,2,total_s,1.320
+RESULT,hackbench,pipe-g4,on,2,total_s,1.389
+RESULT,hackbench,schedpipe,on,2,total_s,1.050
+RESULT,hackbench,msg-g4,off,3,total_s,1.301
+RESULT,hackbench,pipe-g4,off,3,total_s,1.336
+RESULT,hackbench,schedpipe,off,3,total_s,0.987
+RESULT,hackbench,msg-g4,on,3,total_s,1.303
+RESULT,hackbench,pipe-g4,on,3,total_s,1.388
+RESULT,hackbench,schedpipe,on,3,total_s,1.046
+RESULT,hackbench,msg-g4,off,4,total_s,1.302
+RESULT,hackbench,pipe-g4,off,4,total_s,1.373
+RESULT,hackbench,schedpipe,off,4,total_s,1.058
+RESULT,hackbench,msg-g4,on,4,total_s,1.309
+RESULT,hackbench,pipe-g4,on,4,total_s,1.384
+RESULT,hackbench,schedpipe,on,4,total_s,1.101
+RESULT,hackbench,msg-g4,off,5,total_s,1.296
+RESULT,hackbench,pipe-g4,off,5,total_s,1.365
+RESULT,hackbench,schedpipe,off,5,total_s,1.228
+RESULT,hackbench,msg-g4,on,5,total_s,1.312
+RESULT,hackbench,pipe-g4,on,5,total_s,1.389
+RESULT,hackbench,schedpipe,on,5,total_s,0.972
+=== campaign done ===

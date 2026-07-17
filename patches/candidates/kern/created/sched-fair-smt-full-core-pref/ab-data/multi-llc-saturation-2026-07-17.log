@@ -1,0 +1,83 @@
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=01h].ECX.pcid [bit 17]
+qemu-system-x86_64: warning: host doesn't support requested feature: CPUID[eax=07h,ecx=00h].ECX.la57 [bit 16]
+RESULT,tbench,n1,off,1,throughput_mb,471.15
+RESULT,tbench,n8,off,1,throughput_mb,2723
+RESULT,tbench,n16,off,1,throughput_mb,3457.98
+RESULT,tbench,n32,off,1,throughput_mb,4157.6
+RESULT,tbench,n1,on,1,throughput_mb,467.994
+RESULT,tbench,n8,on,1,throughput_mb,2749.99
+RESULT,tbench,n16,on,1,throughput_mb,3405.22
+RESULT,tbench,n32,on,1,throughput_mb,4152.24
+RESULT,tbench,n1,off,2,throughput_mb,461.983
+RESULT,tbench,n8,off,2,throughput_mb,2724.62
+RESULT,tbench,n16,off,2,throughput_mb,3425.7
+RESULT,tbench,n32,off,2,throughput_mb,4245.64
+RESULT,tbench,n1,on,2,throughput_mb,463.094
+RESULT,tbench,n8,on,2,throughput_mb,2707.49
+RESULT,tbench,n16,on,2,throughput_mb,3412.19
+RESULT,tbench,n32,on,2,throughput_mb,4136.54
+RESULT,tbench,n1,off,3,throughput_mb,459.474
+RESULT,tbench,n8,off,3,throughput_mb,2487.85
+RESULT,tbench,n16,off,3,throughput_mb,3406.82
+RESULT,tbench,n32,off,3,throughput_mb,4142.47
+RESULT,tbench,n1,on,3,throughput_mb,458.725
+RESULT,tbench,n8,on,3,throughput_mb,2599.39
+RESULT,tbench,n16,on,3,throughput_mb,3403.56
+RESULT,tbench,n32,on,3,throughput_mb,4133.8
+RESULT,tbench,n1,off,4,throughput_mb,460.967
+RESULT,tbench,n8,off,4,throughput_mb,2666.61
+RESULT,tbench,n16,off,4,throughput_mb,3372.73
+RESULT,tbench,n32,off,4,throughput_mb,4131.02
+RESULT,tbench,n1,on,4,throughput_mb,461.094
+RESULT,tbench,n8,on,4,throughput_mb,2726.8
+RESULT,tbench,n16,on,4,throughput_mb,3378.64
+RESULT,tbench,n32,on,4,throughput_mb,4149.75
+RESULT,tbench,n1,off,5,throughput_mb,464.399
+RESULT,tbench,n8,off,5,throughput_mb,2622.78
+RESULT,tbench,n16,off,5,throughput_mb,3410.36
+RESULT,tbench,n32,off,5,throughput_mb,4134.72
+RESULT,tbench,n1,on,5,throughput_mb,463.138
+RESULT,tbench,n8,on,5,throughput_mb,2596.49
+RESULT,tbench,n16,on,5,throughput_mb,3392.88
+RESULT,tbench,n32,on,5,throughput_mb,4125.36
+RESULT,schbench,low,off,1,wake_p99_us,7
+RESULT,schbench,low,on,1,wake_p99_us,7
+RESULT,schbench,low,off,2,wake_p99_us,7
+RESULT,schbench,low,on,2,wake_p99_us,6
+RESULT,schbench,low,off,3,wake_p99_us,6
+RESULT,schbench,low,on,3,wake_p99_us,7
+RESULT,schbench,low,off,4,wake_p99_us,7
+RESULT,schbench,low,on,4,wake_p99_us,7
+RESULT,schbench,low,off,5,wake_p99_us,7
+RESULT,schbench,low,on,5,wake_p99_us,7
+=== smoke2 done ===

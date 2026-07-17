@@ -1,0 +1,123 @@
+diff --git a/kernel/sched/fair.c b/kernel/sched/fair.c
+index d78467ec6ee1..6ae8e2a90f66 100644
+--- a/kernel/sched/fair.c
++++ b/kernel/sched/fair.c
+@@ -8525,6 +8525,40 @@ static int select_idle_smt(struct task_struct *p, struct sched_domain *sd, int t
+ 	return -1;
+ }
+ 
++/*
++ * The wakeup fast path in select_idle_sibling() can return an idle CPU
++ * whose SMT sibling is busy, even when the LLC still advertises a fully
++ * idle core. The busy sibling means such a CPU only delivers a fraction
++ * of a core's capacity. Return true when @cpu is one of those degraded
++ * idle CPUs while a fully idle core is likely available, in which case
++ * the fast path is skipped so select_idle_cpu() can find the idle core
++ * instead.
++ *
++ * Gated behind the default-off SIS_PREFER_CORE feature: with it off the
++ * function short-circuits to a jump-label NOP, leaving only two
++ * predicted-false guard_forced tests on the scan-return paths; no cost
++ * has been observed with the feature off.
++ *
++ * Suppressed on asymmetric-capacity systems: there the fall-through
++ * targets select_idle_capacity(), which is already idle-core-aware via
++ * asym_fits_cpu(), so forcing the fall-through would be redundant.
++ *
++ * The ordering keeps the common case cheap: sched_feat() is a static
++ * branch, and test_idle_cores() is a single read of a mostly
++ * read-shared per-LLC flag that is false whenever the LLC is saturated;
++ * only when it reads true is the sibling mask inspected. Callers must
++ * only evaluate this after @cpu has already been established as idle, so
++ * the saturated fast path does no extra work at all.
++ */
++static inline bool smt_prefer_idle_core(int cpu)
++{
++	if (!sched_feat(SIS_PREFER_CORE))
++		return false;
++	if (sched_asym_cpucap_active())
++		return false;
++	return sched_smt_active() && test_idle_cores(cpu) && !is_core_idle(cpu);
++}
++
+ /*
+  * Scan the LLC domain for idle CPUs; this is dynamically regulated by
+  * comparing the average scan cost (tracked in sd->avg_scan_cost) against the
+@@ -8800,6 +8834,7 @@ static inline bool asym_fits_cpu(unsigned long util,
+ static int select_idle_sibling(struct task_struct *p, int prev, int target)
+ {
+ 	bool has_idle_core = false;
++	bool guard_forced = false;
+ 	struct sched_domain *sd;
+ 	unsigned long task_util, util_min, util_max;
+ 	int i, recent_used_cpu, prev_aff = -1;
+@@ -8821,8 +8856,16 @@ static int select_idle_sibling(struct task_struct *p, int prev, int target)
+ 	lockdep_assert_irqs_disabled();
+ 
+ 	if (choose_idle_cpu(target, p) &&
+-	    asym_fits_cpu(task_util, util_min, util_max, target))
+-		return target;
++	    asym_fits_cpu(task_util, util_min, util_max, target)) {
++		if (!smt_prefer_idle_core(target))
++			return target;
++		/*
++		 * target is idle but its core is only partially idle while a
++		 * fully idle core is advertised; skip the fast return and let
++		 * the idle-core scan below place the wakee on a full core.
++		 */
++		guard_forced = true;
++	}
+ 
+ 	/*
+ 	 * If the previous CPU is cache affine and idle, don't be stupid:
+@@ -8907,8 +8950,29 @@ static int select_idle_sibling(struct task_struct *p, int prev, int target)
+ 	}
+ 
+ 	i = select_idle_cpu(p, sd, has_idle_core, target);
+-	if ((unsigned)i < nr_cpumask_bits)
++	if ((unsigned)i < nr_cpumask_bits) {
++		/*
++		 * If the target fast return was suppressed to hunt for a full
++		 * idle core (guard_forced) but the scan only turned up a
++		 * partially-idle CPU -- e.g. the has_idle_cores flag was stale
++		 * -- keep the cache-warm target rather than migrate to an
++		 * arbitrary SMT-idle CPU for no capacity gain.
++		 */
++		if (guard_forced && !is_core_idle(i))
++			return target;
+ 		return i;
++	}
++
++	/*
++	 * The scan found nothing at all (e.g. SIS_UTIL bailed on an
++	 * overloaded LLC despite a stale has_idle_cores flag). With the
++	 * feature off the first bailout would have returned the idle
++	 * target; restore exactly that stock decision rather than
++	 * falling through to the prev_aff/recent_used_cpu tail, which
++	 * stock would not have reached.
++	 */
++	if (guard_forced)
++		return target;
+ 
+ 	/*
+ 	 * For cluster machines which have lower sharing cache like L2 or
+diff --git a/kernel/sched/features.h b/kernel/sched/features.h
+index 8f0dee8fc475..b0808d944c3f 100644
+--- a/kernel/sched/features.h
++++ b/kernel/sched/features.h
+@@ -94,6 +94,15 @@ SCHED_FEAT(TTWU_QUEUE, true)
+  */
+ SCHED_FEAT(SIS_UTIL, true)
+ 
++/*
++ * When an idle wakeup target only has an idle SMT thread (its core is
++ * partially busy) while the LLC still advertises a fully idle core,
++ * skip the fast-path return so the idle-core scan can place the wakee
++ * on a full core instead. Default disabled: opt in via
++ * /sys/kernel/debug/sched/features.
++ */
++SCHED_FEAT(SIS_PREFER_CORE, false)
++
+ /*
+  * Issue a WARN when we do multiple update_rq_clock() calls
+  * in a single rq->lock section. Default disabled because the

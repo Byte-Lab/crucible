@@ -3,13 +3,13 @@ title: "sched/fair: prefer a fully idle core over SMT-idle target in select_idle
 slug: sched-fair-smt-full-core-pref
 class: kern
 state: created
-tier: TIER_3
+tier: TIER_1
 created: 2026-07-12
 target: "LKML sched (peterz/vincent) - NOT READY, hold"
 suggested_cc: "Peter Zijlstra, Vincent Guittot, K Prateek Nayak (AMD)"
 base: "neptune 6.16; needs mainline port + full benchmark campaign"
 review_rounds: 2
-review_status: "fresh-fable APPROVE for Deck default-off carry ONLY (explicitly not upstream-ready)"
+review_status: "fresh-fable APPROVE for RFC posting (round 3); code+claims+citations recomputed clean; pending: non-RFC bare-metal multi-socket data"
 ---
 
 ## Summary
