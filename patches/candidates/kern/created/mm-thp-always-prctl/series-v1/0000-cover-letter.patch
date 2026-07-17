@@ -1,0 +1,255 @@
+From 99d7c86ee1905f69695f582c911bce48aab2da69 Mon Sep 17 00:00:00 2001
+From: David Vernet <void@manifault.com>
+Date: Fri, 17 Jul 2026 13:28:37 -0500
+Subject: [RFC PATCH 0/2] prctl: per-process THP opt-in via a PR_SET_THP_DISABLE enable-side flag
+
+To: linux-mm@kvack.org
+Cc: David Hildenbrand <david@kernel.org>,
+    Usama Arif <usamaarif642@gmail.com>,
+    Lorenzo Stoakes <lorenzo.stoakes@oracle.com>,
+    Nico Pache <npache@redhat.com>,
+    Baolin Wang <baolin.wang@linux.alibaba.com>,
+    Dev Jain <dev.jain@arm.com>,
+    Ryan Roberts <ryan.roberts@arm.com>,
+    Johannes Weiner <hannes@cmpxchg.org>,
+    Shakeel Butt <shakeel.butt@linux.dev>,
+    Zi Yan <ziy@nvidia.com>,
+    Yafang Shao <laoar.shao@gmail.com>,
+    Barry Song <baohua@kernel.org>,
+    Rik van Riel <riel@surriel.com>,
+    Andrew Morton <akpm@linux-foundation.org>,
+    linux-api@vger.kernel.org,
+    linux-doc@vger.kernel.org,
+    linux-kernel@vger.kernel.org
+
+A process can opt out of THP for its whole address space with
+prctl(PR_SET_THP_DISABLE), but there is no per-process opt *in*: no
+way to say "treat every THP-eligible anonymous VMA in this mm as if
+MADV_HUGEPAGE had been called on it" without either modifying the
+program or flipping the system-wide policy to enabled=always /
+defrag=always for everyone.
+
+Commit 9dc21bbd62ed ("prctl: extend PR_SET_THP_DISABLE to optionally
+exclude VM_HUGEPAGE") turned PR_SET_THP_DISABLE into a flags
+interface and named this exact use case as its scenario (4): "Stay at
+'madvise' system policy, but enable THPs even when not advised for
+selected workloads -- 'always' policy."  It also stated that "we're
+not willing to add completely new toggles".  This series follows that
+direction instead of fighting it: no new prctl numbers and no new
+toggle.  Patch 1 adds the enable-side flag, PR_THP_ALWAYS_ADVISED,
+to the same PR_SET_THP_DISABLE flags interface; patch 2 adds the
+khugepaged promptness needed to make the flag actually deliver.
+
+Interface summary
+=================
+
+  prctl(PR_SET_THP_DISABLE, 0, PR_THP_ALWAYS_ADVISED, 0, 0)
+    THPs not disabled; additionally treat every THP-eligible
+    anonymous VMA as if MADV_HUGEPAGE had been called on it
+    (eligibility under global "madvise", defrag=always allocation
+    effort).  Inherited across fork()/exec().  64-bit only.
+
+  prctl(PR_SET_THP_DISABLE, 0, 0, 0, 0)
+    Back to default: clears the disable modes (as before) and the
+    always-advised hint.  No behaviour change for existing callers.
+
+  prctl(PR_SET_THP_DISABLE, 1, [PR_THP_DISABLE_EXCEPT_ADVISED], 0, 0)
+    Disable modes, unchanged -- and additionally clear the
+    always-advised hint: disable always wins.  Combining arg2 != 0
+    with PR_THP_ALWAYS_ADVISED fails with -EINVAL (mutually
+    exclusive by construction).
+
+  prctl(PR_GET_THP_DISABLE, 0, 0, 0, 0)
+    0 = default, 1 = disabled completely, 3 = disabled except
+    advised (all as before), 4 = PR_THP_ALWAYS_ADVISED set (bit 0
+    stays the "is disabled" bit, matching the "1 | flags" encoding
+    9dc21bbd62ed reserved).
+
+Motivation
+==========
+
+The concrete use case is a game launcher (Steam, gamescope, or a
+five-line wrapper) opting in a third-party game binary that cannot be
+modified to madvise its own heap.  Profiling Factorio 2.0 headless on
+a Steam Deck (Van Gogh APU) showed a memory/TLB-bound update loop:
+
+  - IPC 0.38, dTLB-load-misses 73.4% of dTLB loads;
+  - only 18.5% of the 154 MB anon heap hugepage-backed (28.6 MB
+    AnonHugePages) under the stock enabled=madvise policy, because
+    the game's allocator never issues MADV_HUGEPAGE;
+  - setting the global THP knobs to aggressive drops dTLB-load-misses
+    to 22.8% (52x fewer absolute misses) and ran the benchmark ~10%
+    faster in an exploratory single-shot probe of that broader global
+    configuration (uncontrolled; the controlled interleaved
+    aggressive-khugepaged A/B below puts the ceiling at +5.76%) --
+    proving heap TLB pressure is the lever, but a global knob imposes
+    synchronous-compaction latency on every process on the system,
+    which is exactly why the kernel default is madvise.
+
+With the series applied and only the target process flagged (stock
+global khugepaged tunables, global enabled=madvise), an interleaved
+A/B on the Deck measured +2.53% updates-per-second (ms/tick 1.4808 ->
+1.4443; Welch t=5.79, p<0.0001, n=32/side interleaved; the UPS gain
+is the ratio of mean ms/tick).  No interleaved ON block mean was
+worse than the overall OFF mean.  A global aggressive-khugepaged
+configuration puts the ceiling at +5.76% UPS (ms/tick 1.4853 ->
+1.4044, n=18/side); the honest gap analysis is in patch 2.
+
+Additional measurement (2026-07-17, supporting): a second real game
+shows the same binding constraint.  Civilization VI's first-party AI
+benchmark on a Steam Deck (stock SteamOS 6.16 kernel, global THP
+enabled=always) was A/B'd on khugepaged promptness alone via sysfs --
+stock scan_sleep_millisecs=10000 / pages_to_scan=4096 vs prompt
+100 / 16384 -- interleaved, 3 blocks x 2 reps per arm, with the
+prompt arm running later in the session and therefore thermally
+disadvantaged.  Frame-time results: fps_avg +4.2% (Welch t=20.4),
+1%-low fps +4.2%, frame-time p99 -6.3%, the same sign in all three
+blocks.  To be clear about what this probes: global khugepaged
+promptness under enabled=always, not the per-mm mechanism of this
+series.  It demonstrates that khugepaged collapse latency is a
+binding constraint for a second real game heap, which is exactly
+what motivates per-process promptness without global tuning.
+
+Why the obvious alternatives do not work
+========================================
+
+The emulation blessed by 9dc21bbd62ed -- handle scenario (4) through
+(3), i.e. set the global policy to "always" and have everything that
+should stay at "madvise" opt out via PR_THP_DISABLE_EXCEPT_ADVISED --
+is backwards for this deployment shape.  On a handheld or fleet node
+where exactly one process should be elevated, it requires modifying
+every OTHER process on the system to opt out: init, system daemons,
+third-party services -- most of which cannot be modified, which is
+the very premise that motivates a prctl in the first place.  The
+natural encoding of "one process opts in" is a flag on that one
+process.
+
+The BPF-based per-process THP policy direction that 9dc21bbd62ed
+pointed to as the likely future was subsequently set aside: per LWN's
+coverage of the LSFMM+BPF 2026 discussion ("Controlling memory
+management with BPF", https://lwn.net/Articles/1072538/), the
+THP-policy BPF direction was set aside, so there is no imminent
+replacement interface for this flag to collide with.
+
+MADV_HUGEPAGE from the app or loader: the binary is third-party and
+cannot be changed.  An LD_PRELOAD shim would have to interpose every
+allocator path and re-advise each new mapping; it is fragile,
+per-allocation, and cannot cover mappings the process creates later.
+(An LD_PRELOAD constructor issuing a single prctl, by contrast, is
+the exact mechanism used for the measurements here.)
+
+process_madvise() from a wrapper: process_madvise_remote_valid()
+deliberately allows only MADV_COLD, MADV_PAGEOUT, MADV_WILLNEED and
+MADV_COLLAPSE on a remote mm; MADV_HUGEPAGE cannot be applied
+remotely.  Extending process_madvise() to allow remote MADV_HUGEPAGE
+would not close the gap either: the advice is per-VMA and does
+persist for the VMAs it hits, but it only reaches VMAs that exist at
+advise time -- every new VMA the process creates afterwards (a
+growing heap's fresh allocator arenas) starts unadvised, and a
+supervisor cannot re-advise on every mmap().  MADV_COLLAPSE is
+one-shot in the same way: it collapses what exists at the time of the
+call and does nothing for the future faults of a growing heap, which
+is where most of this workload's heap comes from.
+
+RSS / memory footprint
+======================
+
+The standard objection to whole-mm advise is RSS bloat: khugepaged
+collapse at the default max_ptes_none (511) can fill in almost-empty
+PMDs, inflating RSS on sparse heaps.  That risk is real and this
+series does not pretend otherwise.  What the flag does NOT do is
+change collapse policy: max_ptes_none and the mTHP-era collapse
+limits apply to a flagged mm unchanged, exactly as they would if the
+process had issued madvise(MADV_HUGEPAGE) itself.  The opt-in is
+per-process and made by a supervisor that owns the memory/performance
+trade-off on the target device (the measured deployment is a 16 GB
+UMA handheld running one foreground game).  The THP shrinker (6.12)
+reclaims underused THPs system-wide, flagged mms included, and any
+future global anti-bloat control applies to flagged mms identically,
+since they go through the same fault and collapse paths as advised
+ones.
+
+Series structure
+================
+
+Patch 1 adds the UAPI flag, the mm flag, fault-path eligibility and
+GFP treatment, fork/exec inheritance, and documentation.  It is fully
+functional on its own, and it is also -- by our own measurement --
+neutral on its own: on-fault THP only covers post-flag faults, and
+stock khugepaged (10 s scans, small round-robin budget) never caught
+up with the already-faulted heap within a benchmark run.
+
+Patch 2 makes khugepaged collapse flagged mms promptly (registration
+kick on opt-in, per-mm scan-budget boost, sleep-skip while a flagged
+mm is actively collapsing).  All three mechanisms are keyed on the
+flag from patch 1 and are exactly zero-cost when no process opts in.
+This patch is what turns the neutral flag into the measured +2.53%.
+
+Notes for reviewers
+===================
+
+- The hint deliberately does NOT count as "advised" for
+  PR_THP_DISABLE_EXCEPT_ADVISED, and setting any disable mode clears
+  it: disable always wins, and PR_GET_THP_DISABLE always reports a
+  single coherent state.  Per-VMA MADV_NOHUGEPAGE and global "never"
+  also still win.
+- GET encoding: we return PR_THP_ALWAYS_ADVISED (4, bit 0 clear)
+  when the hint is set.  0 still means "pure default" and "value & 1"
+  remains the "is disabled" test.  A legacy caller testing the whole
+  value != 0 can only be confused inside a process that itself (or
+  whose launcher) opted in; processes not using the new flag see
+  bit-for-bit unchanged values.  Reasoning spelled out in patch 1.
+- The feature is anon-only (gated in the vma_thp_always() helper, so
+  the eligibility and gfp-mask consumers see the same scope), 64-bit
+  only, default-off.  The 64-bit gate is a policy choice, not a
+  mechanical constraint (NUM_MM_FLAG_BITS is 64 everywhere): no
+  identified 32-bit use case and untested there, and rejecting the
+  flag today is relaxable later without breaking UAPI, whereas the
+  reverse is not.
+- Selftests extending tools/testing/selftests/mm/prctl_thp_disable.c
+  to cover the enable-side flag will accompany the non-RFC posting.
+
+Measurements were taken on a 6.16.12-valve24.4 (Steam Deck) kernel
+carrying an equivalent backport of this series with a prototype prctl
+spelling and pre-mTHP khugepaged; this port to the current tree
+(PR_SET_THP_DISABLE flags interface, mm_flags_t bitmap API, explicit
+inheritance in mm_init(), and khugepaged's mTHP collapse support
+taken into account) is build-tested on x86_64 and i386 (PAE) but not
+yet re-measured.  The series applies on v7.2-rc3; it will be rebased
+to mm-new for the non-RFC posting.
+
+David Vernet (2):
+  prctl: extend PR_SET_THP_DISABLE to optionally treat anon VMAs as
+    advised
+  mm/khugepaged: collapse MMF_THP_ALWAYS mms promptly
+
+ Documentation/admin-guide/mm/transhuge.rst | 29 +++++--
+ include/linux/huge_mm.h                    | 34 +++++++-
+ include/linux/khugepaged.h                 |  4 +
+ include/linux/mm_types.h                   | 33 ++++++++
+ include/uapi/linux/prctl.h                 | 19 ++++-
+ kernel/fork.c                              | 10 +++
+ kernel/sys.c                               | 47 +++++++++-
+ mm/huge_memory.c                           |  3 +-
+ mm/khugepaged.c                            | 99 ++++++++++++++++++++++
+ 9 files changed, 261 insertions(+), 17 deletions(-)
+
+David Vernet (2):
+  prctl: extend PR_SET_THP_DISABLE to optionally treat anon VMAs as
+    advised
+  mm/khugepaged: collapse MMF_THP_ALWAYS mms promptly
+
+ Documentation/admin-guide/mm/transhuge.rst | 29 +++++--
+ include/linux/huge_mm.h                    | 34 +++++++-
+ include/linux/khugepaged.h                 |  4 +
+ include/linux/mm_types.h                   | 33 ++++++++
+ include/uapi/linux/prctl.h                 | 19 ++++-
+ kernel/fork.c                              | 10 +++
+ kernel/sys.c                               | 47 +++++++++-
+ mm/huge_memory.c                           |  3 +-
+ mm/khugepaged.c                            | 99 ++++++++++++++++++++++
+ 9 files changed, 261 insertions(+), 17 deletions(-)
+
+-- 
+2.53.0
+

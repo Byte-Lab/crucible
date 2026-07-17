@@ -19,8 +19,10 @@ update loop — a genuinely different class from the CPU-freq (#3) and SMT (#4) 
   under the stock `enabled=madvise` policy — Factorio's allocator never issues
   `MADV_HUGEPAGE`, so the hot factory-state heap stays 4K-mapped.
 - Setting global `defrag=always` drops dTLB-load-misses to **22.8% (52× fewer absolute
-  misses)** and the benchmark ~10% faster — proving the heap's TLB pressure is the
-  lever. But global `always` imposes synchronous-compaction latency on *every* process,
+  misses)** and ran the benchmark ~10% faster in an exploratory single-shot probe of that
+  broader global configuration (uncontrolled; the controlled interleaved
+  aggressive-khugepaged A/B below puts the ceiling at +5.76%) — proving the heap's TLB
+  pressure is the lever. But global `always` imposes synchronous-compaction latency on *every* process,
   which is exactly why the kernel default is `madvise`. The game needs to opt **only its
   own address space** in. Full analysis + hook-point derivation: `evidence/THP-DESIGN.md`.
 
@@ -52,9 +54,12 @@ minimal scope; DISABLE/NOHUGEPAGE/`never` precedence still wins.
 
 ## Measured
 
-**Ceiling** (global aggressive khugepaged, proves the achievable win), interleaved n=18:
-`evidence/ab-data/thp-ceiling-aggressive.log` — BASE 1.485 → AGGR 1.405 ms/tick,
-**+5.4% UPS, zero overlap**.
+Throughput convention used throughout: **UPS gain = ratio of mean ms/tick**
+(e.g. (1.4808 / 1.4443) - 1 = +2.53%).
+
+**Ceiling** (global aggressive khugepaged, proves the achievable win), interleaved n=18/side:
+`evidence/ab-data/thp-ceiling-aggressive.log` — BASE 1.4853 → AGGR 1.4044 ms/tick,
+**+5.76% UPS (Welch t=21.30), zero overlap**.
 
 **Decisive per-process A/B** (the patch: per-process flag via the prctl shim, **stock**
 global khugepaged, global `enabled=madvise` — so any win is the *patch* driving collapse,
@@ -62,15 +67,53 @@ not global tuning), interleaved, thermally controlled, `evidence/ab-data/thp-prc
 
 | | n | mean ms/tick | sd |
 |---|---|---|---|
-| OFF (no flag) | 28 | 1.4799 | 0.0062 |
-| ON (`PR_SET_THP_ALWAYS`) | 28 | 1.4460 | 0.0320 |
+| OFF (no flag) | 32 | 1.4808 | 0.0066 |
+| ON (`PR_SET_THP_ALWAYS`) | 32 | 1.4443 | 0.0350 |
 
-**Δ +2.29% UPS, Welch t=5.39, p<0.0001. Zero regression** — no ON run is worse than the
-OFF mean; strict improvement in expectation.
+**Δ +2.53% UPS, Welch t=5.79, p<0.0001** (all 32 samples/side from the raw log).
+**Block-level zero regression** — no interleaved ON block mean was worse than the
+overall OFF mean (worst ON block mean 1.4640 vs OFF mean 1.4808). At the individual-run
+level two ON runs (both 1.483) sit marginally above the OFF mean, so the earlier
+per-run "no flagged run was worse" phrasing does not hold on the full data and
+has been retired; the block-level statement is the accurate one.
+
+## Supporting measurement: Civ6 khugepaged-promptness A/B (2026-07-17)
+
+Second real game, probing whether khugepaged collapse latency binds a second game
+heap. **What this probes, stated honestly: global khugepaged promptness under
+`enabled=always`, via sysfs only -- NOT the per-mm patch mechanism.** No patched
+kernel involved. It demonstrates that khugepaged collapse promptness is a binding
+constraint for a second real game heap, and therefore motivates per-process
+promptness without global tuning -- which is what patch 2 provides.
+
+Method:
+
+- Civilization VI first-party AI benchmark (frame-time CSVs, one float ms/line),
+  Steam Deck, stock SteamOS 6.16 kernel, global THP `enabled=always`.
+- A/B on khugepaged tunables alone: stock `scan_sleep_millisecs=10000` /
+  `pages_to_scan=4096` vs prompt `100` / `16384`.
+- Interleaved 3 blocks x 2 reps per arm (n=6 reps/side). Thermal note: the prompt
+  arm ran later in the session and was therefore thermally disadvantaged; the
+  measured advantage is if anything understated.
+- Raw data: `ab-data/civ6/c3thp-{stock,eager}-b{1,2,3}/rep*.csv`. Conventions:
+  fps = n_frames/(sum_ms/1000); 1%-low = 1000/(mean of worst 1% frame times);
+  p99 = linear-interpolated percentile; per-rep metrics, Welch across reps.
+
+Results (recomputed from the raw CSVs):
+
+| metric | stock | prompt | delta | Welch t |
+|---|---|---|---|---|
+| fps_avg | 29.879 | 31.136 | **+4.21%** | 20.36 |
+| 1%-low fps | 9.841 | 10.256 | **+4.22%** | 5.49 |
+| frame-time p99 (ms) | 65.93 | 61.78 | **-6.30%** | -4.52 |
+
+Sign is consistent in all 3 interleaved blocks for all three metrics (per-block
+fps_avg deltas +3.79%/+3.95%/+4.89%; p99 deltas -6.82%/-4.90%/-7.14%). Arm-level
+fps CVs 0.43% (stock) / 0.26% (prompt).
 
 ## Scope / honesty
 
-- The per-process result (+2.29%) is **below the +5.4% aggressive-khugepaged ceiling**,
+- The per-process result (+2.53%) is **below the +5.76% aggressive-khugepaged ceiling**,
   and ON is **bimodal** (sd 5× OFF): when khugepaged collapses the heap early in a run
   the win is large; when its round-robin scan-list position lands the collapse late,
   ON ≈ OFF. The per-mm boost + sleep-skip help but don't fully beat first-collapse
@@ -96,7 +139,9 @@ see `SUMMARY.md` for the APPROVE record.
 ## Artifacts
 
 - `evidence/THP-DESIGN.md` — full bottleneck analysis, mechanism derivation, hook points.
-- `evidence/ab-data/thp-ceiling-aggressive.log` — the +5.4% ceiling (n=18).
-- `evidence/ab-data/thp-prctl-decisive.log` — the decisive per-process A/B (n=28, p<0.0001).
+- `evidence/ab-data/thp-ceiling-aggressive.log` — the +5.76% UPS ceiling (n=18/side).
+- `evidence/ab-data/thp-prctl-decisive.log` — the decisive per-process A/B (n=32/side, p<0.0001).
+- `ab-data/civ6/` — Civ6 khugepaged-promptness A/B raw frame-time CSVs (2026-07-17,
+  supporting measurement; see section above).
 - `thp_always_shim.c` — LD_PRELOAD `constructor(101)` calling `prctl(PR_SET_THP_ALWAYS,1)`;
   the mechanism used to opt an unmodified Factorio binary in for measurement.

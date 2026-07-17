@@ -1,0 +1,159 @@
+prctl: extend PR_SET_THP_DISABLE to optionally treat anon VMAs as advised
+
+A process can opt out of THP with prctl(PR_SET_THP_DISABLE), but there
+is no per-process opt *in*.  A supervisor that wants one process to
+receive MADV_HUGEPAGE-equivalent treatment for its whole anonymous
+address space today has only bad options: modify the program
+(impossible for a third-party binary), interpose every allocator call
+from a shim (fragile, and cannot cover future mappings), or flip the
+global policy to always (which imposes synchronous-compaction latency
+on every process on the system -- exactly why the default is madvise).
+process_madvise() does not help either: process_madvise_remote_valid()
+deliberately excludes MADV_HUGEPAGE for remote mms, and MADV_COLLAPSE
+is one-shot, doing nothing for the future faults of a growing heap.
+
+The motivating workload is a game launcher opting in a third-party
+game binary.  Factorio 2.0 headless on a Steam Deck runs a
+memory/TLB-bound update loop: IPC 0.38, dTLB-load-misses 73.4%, with
+only 18.5% of its 154 MB anon heap hugepage-backed (28.6 MB
+AnonHugePages) under enabled=madvise, because the game's allocator
+never issues MADV_HUGEPAGE.  Aggressive global THP settings drop
+dTLB-load-misses to 22.8% (52x fewer absolute misses) and ran the
+benchmark ~10% faster in an exploratory single-shot probe of that
+broader global configuration (uncontrolled; the controlled interleaved
+A/B in patch 2 puts the aggressive-khugepaged ceiling at +5.76%),
+confirming heap TLB pressure is the lever -- but only this process
+should pay for that treatment.
+
+Commit 9dc21bbd62ed ("prctl: extend PR_SET_THP_DISABLE to optionally
+exclude VM_HUGEPAGE") enumerated exactly this use case as its scenario
+(4): "Stay at 'madvise' system policy, but enable THPs even when not
+advised for selected workloads -- 'always' policy."  It also drew a
+clear line: "a simple enable/disable is not really suitable for the
+future, so we're not willing to add completely new toggles."  This
+patch takes that line seriously: it adds no new toggle and no new
+prctl number.  It completes the existing PR_SET_THP_DISABLE flags
+interface with the enable-side flag for scenario (4), in the encoding
+that commit already reserved (bit 0 of the PR_GET_THP_DISABLE return
+value is the disable state, higher bits are flags).
+
+The emulation blessed by that commit -- handle (4) through (3), i.e.
+set the global policy to "always" and have everything that should stay
+at "madvise" opt out via PR_THP_DISABLE_EXCEPT_ADVISED -- is backwards
+for this deployment shape.  On a handheld (or any fleet node) where
+exactly one process should be elevated, it requires modifying every
+OTHER process on the system to opt out: init, system daemons,
+third-party services -- most of which cannot be modified, which is the
+very premise that motivates the prctl approach in the first place.
+The natural encoding of "one process opts in" is a flag on that one
+process.  As for the alternative that commit deferred to, the
+BPF-based per-process THP policy direction was subsequently set aside
+by the community (LSFMM 2026), so there is no imminent replacement
+interface for this to collide with.
+
+In essence, this patch:
+
+(A) Adds PR_THP_ALWAYS_ADVISED, to be used as a flag in arg3 of
+    prctl(PR_SET_THP_DISABLE) when not disabling (arg2 == 0):
+
+      prctl(PR_SET_THP_DISABLE, 0, PR_THP_ALWAYS_ADVISED, 0, 0);
+
+    meaning: THPs are not disabled for this process and, additionally,
+    every THP-eligible anonymous VMA in this mm is treated as if
+    madvise(MADV_HUGEPAGE) had been called on it (MMF_THP_ALWAYS).
+    Combining the flag with any disable mode (arg2 != 0) fails with
+    -EINVAL: disabling THPs and treating unadvised VMAs as advised are
+    mutually exclusive by construction, mirroring how
+    PR_THP_DISABLE_EXCEPT_ADVISED is only accepted when disabling.
+
+(B) Keeps prctl(PR_SET_THP_DISABLE, 0, 0, 0, 0) as plain "back to
+    default": it clears the disable modes exactly as before and now
+    also clears MMF_THP_ALWAYS.  Existing callers observe no change,
+    since they cannot have MMF_THP_ALWAYS set.
+
+(C) Makes setting any disable mode (arg2 != 0) clear MMF_THP_ALWAYS.
+    Both vma_thp_always() consumers sit behind the vma_thp_disabled()
+    vetoes anyway, so a disable mode already overrides the hint in
+    effect; clearing the bit as well keeps PR_GET_THP_DISABLE
+    reporting a single coherent state ("disable always wins").
+
+(D) Makes prctl(PR_GET_THP_DISABLE) return PR_THP_ALWAYS_ADVISED (4)
+    when the hint is set (and, per (C), no disable mode is).
+
+    Encoding rationale: the merged interface reserved bit 0 for the
+    disable state precisely so GET could return "1 | flags"; this
+    extends the same scheme to "0 | flags".  A return of 0 still
+    means "pure default", and "value & 1" remains the documented "is
+    disabled" test.  The residual hazard is a legacy caller that
+    tests the whole return value != 0 as "disabled": such a caller
+    can only be confused inside a process that -- or whose launcher
+    -- explicitly opted into PR_THP_ALWAYS_ADVISED; for every process
+    not using the new flag the returned values are bit-for-bit
+    unchanged.  We chose this over reporting nothing (no
+    introspection for the new mode) or gating the report behind a
+    selector argument (a second calling convention for one bit of
+    state).
+
+One mm flag suffices because both halves of MADV_HUGEPAGE's behaviour
+already key off the same two per-VMA predicates:
+
+ 1. Eligibility: thp_vma_allowable_orders() ORs in the madvise (and,
+    under enabled=madvise, the inherit) order mask when the VMA is
+    hinted.  Extend the hint test with vma_thp_always().
+
+ 2. Allocation effort: vma_thp_gfp_mask() gives a hinted VMA under
+    the default defrag=madvise the bit-for-bit defrag=always mask
+    (synchronous compaction, no __GFP_NORETRY under defrag=always).
+    Extend vma_madvised with the same test.
+
+Both tests share the vma_thp_always() helper, which is itself gated on
+vma_is_anonymous(): the hint is anon-gated at the helper, so the
+anon-only scope covers both consumers -- including the
+vma_thp_gfp_mask() callers on shmem and swap-in paths that never go
+through the anonymous-VMA eligibility check.
+
+Precedence is conservative: the hint is applied where VM_HUGEPAGE
+would be, and the vetoes are evaluated afterwards, so per-VMA
+MADV_NOHUGEPAGE, global "never" and both PR_SET_THP_DISABLE modes
+still win.  In particular the hint deliberately does NOT count as
+"advised" for MMF_DISABLE_THP_EXCEPT_ADVISED -- with (C) the
+combination cannot even be constructed via prctl(), and the veto
+ordering backstops any future path that sets the bits directly.  A
+stricter combined semantic can be relaxed later; the reverse is
+UAPI-breaking.
+
+The flag is inherited across fork() and exec(), matching
+MMF_DISABLE_THP_*, so a launcher can prctl() and exec the target.
+MMF_THP_ALWAYS sits above the legacy flags word, so mm_init()
+propagates it explicitly rather than via MMF_INIT_LEGACY_MASK.
+Unlike DISABLE, inheritance here inflates rather than restricts
+resource use, so it can flow into an exec'd helper (or setuid
+binary) that never asked for it; this is kept for symmetry with
+THP_DISABLE and documented -- a launcher should set the flag as late
+as possible, and children may clear it or use MADV_NOHUGEPAGE, both
+of which are honoured.
+
+The feature is 64-bit only (PR_THP_ALWAYS_ADVISED is rejected with
+-EINVAL on 32-bit and every flag read is gated on
+IS_ENABLED(CONFIG_64BIT)), anon-only, and default-off: every
+behavioural change is behind a flag test that is false for every
+existing mm, so unflagged processes see zero policy change.  The
+64-bit gate is a policy choice, not a mechanical constraint
+(NUM_MM_FLAG_BITS is 64 on every architecture, so the bitmap could
+hold the bit): no 32-bit use case has been identified and the feature
+is untested there, and rejecting the flag today can be relaxed later
+without breaking UAPI, whereas retracting 32-bit support could not be.
+/proc/pid/status THP_enabled is unchanged: it keeps reporting only the
+complete-disable state, exactly as before.
+
+Note on standalone effect, measured honestly: this patch alone was
+neutral on the motivating workload.  On-fault THP only covers
+mappings faulted after the flag is set, and stock khugepaged (10 s
+scan interval, small round-robin budget) never caught up with the
+already-faulted heap within a ~67 s benchmark run.  The follow-up
+patch adds the khugepaged promptness that makes the flag deliver; the
+interface and the collapse prioritization are kept separate so each
+can be reviewed on its own terms.
+
+Signed-off-by: David Vernet <void@manifault.com>
+

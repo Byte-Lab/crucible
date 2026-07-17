@@ -1,0 +1,73 @@
+mm/khugepaged: collapse MMF_THP_ALWAYS mms promptly
+
+The PR_THP_ALWAYS_ADVISED flag alone measured *neutral* on the
+motivating workload: on-fault THP only covers post-flag faults, and
+stock khugepaged -- 10 s scan interval, small per-wakeup budget,
+round-robin over every registered mm -- never collapsed the
+already-faulted heap within a ~67 s benchmark run (AnonHugePages
+stayed flat).  A process that explicitly opted into aggressive THP
+wants its existing heap collapsed promptly, not eventually.
+
+Add three mechanisms, all keyed on MMF_THP_ALWAYS and therefore
+exactly zero-cost when no process has opted in:
+
+ 1. Kick on opt-in: khugepaged_enter_mm(), called from
+    prctl(PR_SET_THP_DISABLE, 0, PR_THP_ALWAYS_ADVISED), registers
+    the mm with khugepaged (an already-running process may otherwise
+    not be registered until its next mmap or huge fault) and wakes
+    the daemon.  The wake zeroes khugepaged_sleep_expire first -- as
+    every in-tree kick does -- because khugepaged_should_wakeup()
+    otherwise ignores a bare wake while a scan_sleep is pending.
+
+ 2. Per-mm scan-budget boost: when the current scan slot is a
+    flagged mm, raise the per-call budget so a single pass covers
+    long runs of scan-only PMDs.  This does not let one mm sweep
+    everything in one go -- each attempted collapse still drops
+    mmap_lock and returns, and khugepaged_do_scan() still ends the
+    wakeup at the global pages_to_scan cap -- and the boost is
+    itself capped so one giant flagged mm cannot monopolise a pass.
+
+ 3. Sleep-skip while collapsing: when a pass successfully collapsed
+    a hugepage in a flagged mm, skip the next scan_sleep throttle
+    and run back-to-back.  Self-limiting: the bit clears itself, so
+    the normal throttle resumes as soon as collapses stop.
+
+Since khugepaged can now also collapse to sub-PMD (mTHP) orders, the
+boosted pass benefits flagged mms whose sysfs configuration enables
+mTHP orders as well; nothing here is PMD-specific.
+
+Measured on the motivating workload (Factorio 2.0 headless, Steam
+Deck, interleaved A/B, stock global khugepaged tunables, global
+enabled=madvise, only the game flagged): +2.53% updates-per-second
+(ms/tick 1.4808 -> 1.4443; Welch t=5.79, p<0.0001, n=32/side
+interleaved).  Throughput convention, used consistently below: the
+UPS gain is the ratio of mean ms/tick, (1.4808 / 1.4443) - 1.  No
+interleaved ON block mean was worse than the overall OFF mean (worst
+ON block mean 1.4640 vs OFF mean 1.4808).  A global
+aggressive-khugepaged configuration puts the ceiling at +5.76% UPS
+(ms/tick 1.4853 -> 1.4044, n=18/side).
+
+These numbers were measured on a 6.16.12-valve24.4 (Steam Deck)
+kernel carrying an equivalent backport of this series with a
+prototype prctl spelling and pre-mTHP khugepaged; this port to the
+current tree is build-tested but not yet re-measured.
+
+The gap to the ceiling is honest and understood: the flagged side is
+bimodal (sd roughly 5x the unflagged side).  There is no scan-list
+reprioritisation, so a freshly flagged mm is still reached in list
+order; when its first collapse lands early in a run the win is
+large, and when the round-robin position lands it late the run
+approaches the unflagged mean.  Bounding time-to-first-collapse
+would require reordering the scan list for flagged mms, a fairness
+trade-off deliberately not taken here.
+
+Known limitations, documented at the mechanisms in mm/khugepaged.c:
+a flagged process that keeps faulting and freeing anonymous memory
+can hold khugepaged unthrottled via the sleep-skip (bounded per
+collapse attempt by ~max_ptes_none PTEs of scan work; khugepaged
+runs at MAX_NICE, so this is a fairness concern, not a liveness
+one), and the sleep-skip can carry one stale back-to-back pass
+after a flagged process exits.
+
+Signed-off-by: David Vernet <void@manifault.com>
+

@@ -1,0 +1,277 @@
+From 99d7c86ee1905f69695f582c911bce48aab2da69 Mon Sep 17 00:00:00 2001
+From: David Vernet <void@manifault.com>
+Date: Fri, 17 Jul 2026 13:28:12 -0500
+Subject: [RFC PATCH 2/2] mm/khugepaged: collapse MMF_THP_ALWAYS mms promptly
+
+The PR_THP_ALWAYS_ADVISED flag alone measured *neutral* on the
+motivating workload: on-fault THP only covers post-flag faults, and
+stock khugepaged -- 10 s scan interval, small per-wakeup budget,
+round-robin over every registered mm -- never collapsed the
+already-faulted heap within a ~67 s benchmark run (AnonHugePages
+stayed flat).  A process that explicitly opted into aggressive THP
+wants its existing heap collapsed promptly, not eventually.
+
+Add three mechanisms, all keyed on MMF_THP_ALWAYS and therefore
+exactly zero-cost when no process has opted in:
+
+ 1. Kick on opt-in: khugepaged_enter_mm(), called from
+    prctl(PR_SET_THP_DISABLE, 0, PR_THP_ALWAYS_ADVISED), registers
+    the mm with khugepaged (an already-running process may otherwise
+    not be registered until its next mmap or huge fault) and wakes
+    the daemon.  The wake zeroes khugepaged_sleep_expire first -- as
+    every in-tree kick does -- because khugepaged_should_wakeup()
+    otherwise ignores a bare wake while a scan_sleep is pending.
+
+ 2. Per-mm scan-budget boost: when the current scan slot is a
+    flagged mm, raise the per-call budget so a single pass covers
+    long runs of scan-only PMDs.  This does not let one mm sweep
+    everything in one go -- each attempted collapse still drops
+    mmap_lock and returns, and khugepaged_do_scan() still ends the
+    wakeup at the global pages_to_scan cap -- and the boost is
+    itself capped so one giant flagged mm cannot monopolise a pass.
+
+ 3. Sleep-skip while collapsing: when a pass successfully collapsed
+    a hugepage in a flagged mm, skip the next scan_sleep throttle
+    and run back-to-back.  Self-limiting: the bit clears itself, so
+    the normal throttle resumes as soon as collapses stop.
+
+Since khugepaged can now also collapse to sub-PMD (mTHP) orders, the
+boosted pass benefits flagged mms whose sysfs configuration enables
+mTHP orders as well; nothing here is PMD-specific.
+
+Measured on the motivating workload (Factorio 2.0 headless, Steam
+Deck, interleaved A/B, stock global khugepaged tunables, global
+enabled=madvise, only the game flagged): +2.53% updates-per-second
+(ms/tick 1.4808 -> 1.4443; Welch t=5.79, p<0.0001, n=32/side
+interleaved).  Throughput convention, used consistently below: the
+UPS gain is the ratio of mean ms/tick, (1.4808 / 1.4443) - 1.  No
+interleaved ON block mean was worse than the overall OFF mean (worst
+ON block mean 1.4640 vs OFF mean 1.4808).  A global
+aggressive-khugepaged configuration puts the ceiling at +5.76% UPS
+(ms/tick 1.4853 -> 1.4044, n=18/side).
+
+These numbers were measured on a 6.16.12-valve24.4 (Steam Deck)
+kernel carrying an equivalent backport of this series with a
+prototype prctl spelling and pre-mTHP khugepaged; this port to the
+current tree is build-tested but not yet re-measured.
+
+The gap to the ceiling is honest and understood: the flagged side is
+bimodal (sd roughly 5x the unflagged side).  There is no scan-list
+reprioritisation, so a freshly flagged mm is still reached in list
+order; when its first collapse lands early in a run the win is
+large, and when the round-robin position lands it late the run
+approaches the unflagged mean.  Bounding time-to-first-collapse
+would require reordering the scan list for flagged mms, a fairness
+trade-off deliberately not taken here.
+
+Known limitations, documented at the mechanisms in mm/khugepaged.c:
+a flagged process that keeps faulting and freeing anonymous memory
+can hold khugepaged unthrottled via the sleep-skip (bounded per
+collapse attempt by ~max_ptes_none PTEs of scan work; khugepaged
+runs at MAX_NICE, so this is a fairness concern, not a liveness
+one), and the sleep-skip can carry one stale back-to-back pass
+after a flagged process exits.
+
+Signed-off-by: David Vernet <void@manifault.com>
+---
+ include/linux/khugepaged.h |  4 ++
+ kernel/sys.c               |  8 +++
+ mm/khugepaged.c            | 99 ++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 111 insertions(+)
+
+diff --git a/include/linux/khugepaged.h b/include/linux/khugepaged.h
+index d7a9053ff4fe..cf6918869d12 100644
+--- a/include/linux/khugepaged.h
++++ b/include/linux/khugepaged.h
+@@ -15,6 +15,7 @@ extern void __khugepaged_enter(struct mm_struct *mm);
+ extern void __khugepaged_exit(struct mm_struct *mm);
+ extern void khugepaged_enter_vma(struct vm_area_struct *vma,
+ 				 vm_flags_t vm_flags);
++extern void khugepaged_enter_mm(struct mm_struct *mm);
+ extern void khugepaged_min_free_kbytes_update(void);
+ extern bool current_is_khugepaged(void);
+ void collapse_pte_mapped_thp(struct mm_struct *mm, unsigned long addr,
+@@ -42,6 +43,9 @@ static inline void khugepaged_enter_vma(struct vm_area_struct *vma,
+ 					vm_flags_t vm_flags)
+ {
+ }
++static inline void khugepaged_enter_mm(struct mm_struct *mm)
++{
++}
+ static inline void collapse_pte_mapped_thp(struct mm_struct *mm,
+ 		unsigned long addr, bool install_pmd)
+ {
+diff --git a/kernel/sys.c b/kernel/sys.c
+index 9546c1051fe6..98b1fda94a54 100644
+--- a/kernel/sys.c
++++ b/kernel/sys.c
+@@ -8,6 +8,7 @@
+ #include <linux/export.h>
+ #include <linux/mm.h>
+ #include <linux/mm_inline.h>
++#include <linux/khugepaged.h>
+ #include <linux/utsname.h>
+ #include <linux/mman.h>
+ #include <linux/reboot.h>
+@@ -2561,6 +2562,13 @@ static int prctl_set_thp_disable(bool thp_disable, unsigned long flags,
+ 		}
+ 	}
+ 	mmap_write_unlock(current->mm);
++	/*
++	 * Register with and wake khugepaged so an already-populated
++	 * heap starts collapsing within a wakeup rather than after the
++	 * next 10s scan cycle.  No-op when THP is compiled out.
++	 */
++	if (!thp_disable && (flags & PR_THP_ALWAYS_ADVISED))
++		khugepaged_enter_mm(mm);
+ 	return 0;
+ }
+ 
+diff --git a/mm/khugepaged.c b/mm/khugepaged.c
+index 617bca76db49..d897af885efe 100644
+--- a/mm/khugepaged.c
++++ b/mm/khugepaged.c
+@@ -80,6 +80,33 @@ static unsigned int khugepaged_scan_sleep_millisecs __read_mostly = 10000;
+ /* during fragmentation poll the hugepage allocator once every minute */
+ static unsigned int khugepaged_alloc_sleep_millisecs __read_mostly = 60000;
+ static unsigned long khugepaged_sleep_expire;
++/*
++ * Set when the last scan pass collapsed a hugepage in an MMF_THP_ALWAYS mm.
++ * Makes khugepaged run the next pass back-to-back (skipping the scan_sleep
++ * throttle) so a freshly-flagged heap collapses within a wakeup or two
++ * instead of dozens.  Self-limiting: once a pass stops finding flagged-mm
++ * collapses this clears and the normal throttle resumes.  Only ever set
++ * when a process has opted in via prctl(PR_SET_THP_DISABLE, 0,
++ * PR_THP_ALWAYS_ADVISED); zero effect otherwise.
++ *
++ * KNOWN LIMITATIONS (non-blocking; for upstream discussion):
++ *  (a) An unprivileged flagged process that keeps faulting/freeing anon
++ *      pages can hold khugepaged unthrottled via this skip, amplifying
++ *      scan work up to ~max_ptes_none (511) PTEs per collapse attempt.
++ *      khugepaged runs at MAX_NICE, so this is a fairness, not a
++ *      liveness, concern.
++ *  (b) The flag is daemon-global, so it can carry one stale back-to-back
++ *      pass after the flagged process exits (it outlives the mm by a
++ *      pass).
++ */
++static bool khugepaged_thp_always_progress;
++/*
++ * Per-pass scan budget for an MMF_THP_ALWAYS mm.  Large enough to sweep a
++ * multi-hundred-MB heap in a single pass, but capped so one giant flagged
++ * mm cannot starve the rest of the scan list indefinitely (progress is
++ * charged roughly per PTE scanned, HPAGE_PMD_NR per fully-scanned PMD).
++ */
++#define KHUGEPAGED_THP_ALWAYS_PAGES	(HPAGE_PMD_NR * 512)
+ static DEFINE_SPINLOCK(khugepaged_mm_lock);
+ static DECLARE_WAIT_QUEUE_HEAD(khugepaged_wait);
+ /*
+@@ -597,6 +624,30 @@ void khugepaged_enter_vma(struct vm_area_struct *vma,
+ 		__khugepaged_enter(vma->vm_mm);
+ }
+ 
++/*
++ * Register @mm with khugepaged (if not already) and kick the daemon so a
++ * freshly-flagged MMF_THP_ALWAYS mm is picked up promptly rather than on
++ * the next 10s wakeup.  Called from prctl(PR_SET_THP_DISABLE, 0,
++ * PR_THP_ALWAYS_ADVISED).  A no-op for the daemon if hugepages are
++ * globally off; the wake is harmless then.
++ */
++void khugepaged_enter_mm(struct mm_struct *mm)
++{
++	if (!hugepage_enabled())
++		return;
++	if (!mm_flags_test(MMF_VM_HUGEPAGE, mm))
++		__khugepaged_enter(mm);
++	/*
++	 * Collapse the throttle sleep so the kick actually interrupts it:
++	 * khugepaged_should_wakeup() is gated on khugepaged_sleep_expire, so a
++	 * bare wake while a scan_sleep is pending just re-sleeps (the daemon
++	 * almost always has other registered mms on a desktop).  Every in-tree
++	 * kick (scan/alloc_sleep_millisecs_store) zeroes it first; match them.
++	 */
++	khugepaged_sleep_expire = 0;
++	wake_up_interruptible(&khugepaged_wait);
++}
++
+ void __khugepaged_exit(struct mm_struct *mm)
+ {
+ 	struct mm_slot *slot;
+@@ -2849,6 +2900,7 @@ static void collapse_scan_mm_slot(unsigned int progress_max,
+ 	struct mm_struct *mm;
+ 	struct vm_area_struct *vma;
+ 	unsigned int progress_prev = cc->progress;
++	bool thp_always;
+ 
+ 	lockdep_assert_held(&khugepaged_mm_lock);
+ 	*result = SCAN_FAIL;
+@@ -2864,6 +2916,32 @@ static void collapse_scan_mm_slot(unsigned int progress_max,
+ 	spin_unlock(&khugepaged_mm_lock);
+ 
+ 	mm = slot->mm;
++	/*
++	 * A process that opted into aggressive THP via
++	 * prctl(PR_SET_THP_DISABLE, 0, PR_THP_ALWAYS_ADVISED) wants its
++	 * heap collapsed promptly.  Raising the per-call budget does
++	 * NOT sweep the whole mm in one pass: every *attempted* collapse drops
++	 * mmap_lock and returns from this function (the lock_dropped break),
++	 * and khugepaged_do_scan() still ends the wakeup once cc->progress
++	 * reaches the global pages_to_scan cap.  The boost only lets a single
++	 * call cover longer contiguous runs of scan-only (non-collapsing)
++	 * PMDs before hitting the budget; the real throughput win is the
++	 * sleep-skip in khugepaged_wait_work().  Capped so a huge flagged mm
++	 * cannot monopolise a pass.
++	 *
++	 * There is deliberately no scan-list reprioritisation: a freshly
++	 * flagged mm is still reached in list order, so time-to-first-collapse
++	 * on a busy scan list is unbounded (a fairness trade-off; see the
++	 * commit message for the measured bimodality this causes).
++	 *
++	 * 64-bit only (see MMF_THP_ALWAYS): the prctl cannot set the flag on
++	 * 32-bit, and IS_ENABLED() lets the compiler drop the test there.
++	 */
++	thp_always = IS_ENABLED(CONFIG_64BIT) &&
++		     mm_flags_test(MMF_THP_ALWAYS, mm);
++	if (thp_always)
++		progress_max = max(progress_max,
++				   (unsigned int)KHUGEPAGED_THP_ALWAYS_PAGES);
+ 	/*
+ 	 * Don't wait for semaphore (to avoid long wait times).  Just move to
+ 	 * the next mm on the list.
+@@ -2912,6 +2990,15 @@ static void collapse_scan_mm_slot(unsigned int progress_max,
+ 
+ 			*result = collapse_single_pmd(khugepaged_scan.address,
+ 						      vma, &lock_dropped, cc);
++			/*
++			 * Actively collapsing a flagged mm's heap: signal
++			 * khugepaged_wait_work() to skip the scan_sleep
++			 * throttle and run the next pass back-to-back until
++			 * the heap is done.
++			 */
++			if (thp_always && *result == SCAN_SUCCEED)
++				WRITE_ONCE(khugepaged_thp_always_progress,
++					   true);
+ 			/* move to next address */
+ 			khugepaged_scan.address += HPAGE_PMD_SIZE;
+ 			if (lock_dropped)
+@@ -3023,6 +3110,18 @@ static void khugepaged_wait_work(void)
+ 		const unsigned long scan_sleep_jiffies =
+ 			msecs_to_jiffies(khugepaged_scan_sleep_millisecs);
+ 
++		/*
++		 * The previous pass collapsed hugepages in an aggressive-THP
++		 * (MMF_THP_ALWAYS) mm -- keep scanning back-to-back so its
++		 * heap finishes fast.  Clears itself, so once collapses stop
++		 * the normal throttle resumes.  Never set unless a process
++		 * opted in, so unflagged systems are unaffected.
++		 */
++		if (READ_ONCE(khugepaged_thp_always_progress)) {
++			WRITE_ONCE(khugepaged_thp_always_progress, false);
++			return;
++		}
++
+ 		if (!scan_sleep_jiffies)
+ 			return;
+ 
+-- 
+2.53.0
+
