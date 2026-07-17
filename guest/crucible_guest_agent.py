@@ -1283,20 +1283,44 @@ def _read_cgroup_psi() -> dict[str, dict[str, str]]:
 # vsock server loop
 # ---------------------------------------------------------------------------
 
-def serve() -> None:
-    """Listen on vsock port 5000 and dispatch RPC commands."""
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    handler = GuestAgentHandler()
+def _make_listen_socket() -> socket.socket:
+    """Build the listening socket.
+
+    Transport is selected by ``CRUCIBLE_AGENT_TRANSPORT``:
+      - ``vsock`` (default) — AF_VSOCK on ``VSOCK_PORT``; used inside the
+        virtme-ng VM.
+      - ``tcp`` — AF_INET, for the bare-metal Steam Deck lane (no vsock).
+        Host/port from ``CRUCIBLE_AGENT_TCP_HOST`` (default ``0.0.0.0``)
+        and ``CRUCIBLE_AGENT_TCP_PORT`` (default ``VSOCK_PORT``).
+    The wire framing (4-byte length prefix + JSON) is identical either way.
+    """
+    transport = os.environ.get("CRUCIBLE_AGENT_TRANSPORT", "vsock").lower()
+    if transport == "tcp":
+        host = os.environ.get("CRUCIBLE_AGENT_TCP_HOST", "0.0.0.0")
+        port = int(os.environ.get("CRUCIBLE_AGENT_TCP_PORT", str(VSOCK_PORT)))
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind((host, port))
+        logger.info("crucible guest agent listening on TCP %s:%d", host, port)
+        return sock
 
     # AF_VSOCK = 40, VMADDR_CID_ANY = 0xFFFFFFFF
     AF_VSOCK = 40
     VMADDR_CID_ANY = 0xFFFFFFFF
-
     sock = socket.socket(AF_VSOCK, socket.SOCK_STREAM)
     sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     sock.bind((VMADDR_CID_ANY, VSOCK_PORT))
-    sock.listen(4)
     logger.info("crucible guest agent listening on vsock port %d", VSOCK_PORT)
+    return sock
+
+
+def serve() -> None:
+    """Listen for RPC connections and dispatch commands (vsock or TCP)."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    handler = GuestAgentHandler()
+
+    sock = _make_listen_socket()
+    sock.listen(4)
 
     while True:
         conn, addr = sock.accept()

@@ -15,7 +15,7 @@ from claude_agent_sdk import (
 )
 
 from agents.common.agent_base import AgentBase
-from agents.common.guest_rpc import GuestRpc
+from agents.common.guest_rpc import GuestRpc, VSOCK_PORT
 from agents.common.protocol import ApiUsage, TaskEnvelope
 from agents.common.tool_registry import ToolRegistry
 
@@ -71,16 +71,26 @@ class ClaudeAgentBase(AgentBase):
         # Expose a guest-RPC client to tools when the orchestrator threaded
         # a vsock CID through context. Tests construct TaskEnvelope without
         # this key, in which case tools fall back to dry-run behavior.
-        cid = task.context.get("vsock_cid")
         # The RPC socket timeout must outlive the longest guest-side call:
         # launch_benchmark blocks for the whole vkmark/glmark2 run (up to
         # 600s) and run_benchmark for duration+30s. The default 30s socket
         # timeout would kill both, so track the agent-level timeout instead.
-        self._guest_rpc = (
-            GuestRpc(int(cid), timeout_secs=float(task.config.timeout_seconds))
-            if isinstance(cid, int)
-            else None
-        )
+        # Transport is backend-selected: the Deck lane threads a TCP
+        # host/port; the VM lane threads a vsock CID. Neither present (unit
+        # tests) leaves tools in dry-run mode.
+        deck_host = task.context.get("deck_host")
+        cid = task.context.get("vsock_cid")
+        rpc_timeout = float(task.config.timeout_seconds)
+        if isinstance(deck_host, str) and deck_host:
+            self._guest_rpc = GuestRpc(
+                host=deck_host,
+                port=int(task.context.get("deck_port", VSOCK_PORT)),
+                timeout_secs=rpc_timeout,
+            )
+        elif isinstance(cid, int):
+            self._guest_rpc = GuestRpc(cid=int(cid), timeout_secs=rpc_timeout)
+        else:
+            self._guest_rpc = None
         self.setup_tools(registry)
         return asyncio.run(self._run(task, registry))
 

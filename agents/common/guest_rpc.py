@@ -20,10 +20,27 @@ AF_VSOCK = 40
 
 
 class GuestRpc:
-    """Connect-per-call wrapper for the length-prefixed JSON vsock protocol."""
+    """Connect-per-call wrapper for the length-prefixed JSON guest protocol.
 
-    def __init__(self, cid: int, port: int = VSOCK_PORT, timeout_secs: float = 30.0) -> None:
+    Two transports share one framing:
+      - vsock (VM lane): construct with ``cid`` — connects AF_VSOCK to
+        ``(cid, port)``.
+      - TCP (Steam Deck lane): construct with ``host`` — connects AF_INET
+        to ``(host, port)``.
+    Exactly one of ``cid``/``host`` must be set.
+    """
+
+    def __init__(
+        self,
+        cid: int | None = None,
+        host: str | None = None,
+        port: int = VSOCK_PORT,
+        timeout_secs: float = 30.0,
+    ) -> None:
+        if (cid is None) == (host is None):
+            raise ValueError("GuestRpc requires exactly one of cid (vsock) or host (tcp)")
         self.cid = cid
+        self.host = host
         self.port = port
         self.timeout_secs = timeout_secs
 
@@ -33,10 +50,15 @@ class GuestRpc:
         if args:
             payload.update(args)
 
-        sock = socket.socket(AF_VSOCK, socket.SOCK_STREAM)
+        if self.host is not None:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            target: Any = (self.host, self.port)
+        else:
+            sock = socket.socket(AF_VSOCK, socket.SOCK_STREAM)
+            target = (self.cid, self.port)
         sock.settimeout(self.timeout_secs)
         try:
-            sock.connect((self.cid, self.port))
+            sock.connect(target)
             _send(sock, payload)
             return _recv(sock)
         finally:
