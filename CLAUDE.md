@@ -98,6 +98,26 @@ Logging: orchestrator uses `tracing` with `RUST_LOG`-style env filter — defaul
 
 ## Architecture
 
+### Repository layout
+
+- `crates/` -- Rust workspace: orchestrator daemon + shared protocol types
+- `agents/` -- host-side Python agent workers (Claude-backed)
+- `guest/` -- payload deployed INSIDE the measurement VM / onto the Deck
+  (guest agent RPC daemon, stdlib-only protocol mirror, systemd unit,
+  cgroup setup). Copied into every rootfs by testbed/virt/lib, overlaid
+  live via `[vm] guest_payload`, rsynced to the Deck by the deck backend.
+- `testbed/` -- platform setup + benchmarking machinery, NOT product code:
+  `testbed/virt/` (rootfs builders, VFIO host setup for the vng VM loop),
+  `testbed/deck/` (Steam Deck bootstrap/slot-B deploy, interleaved A/B
+  harnesses, stats tools -- see testbed/README.md for the inventory)
+- `patches/` -- the upstream patch corpus: `candidates/` pipeline managed
+  by `patches/candidates/patchctl`, `negative-results/`, shared `evidence/`
+  (see "Upstream patch corpus" section below). Perfetto traces are
+  co-located with their patch but gitignored (*.pftrace).
+- `config/` -- crucible.toml; `docs/` -- design specs + dated plan docs
+  (plan docs are historical records, paths inside may predate reorgs);
+  `tests/python/` -- agent/protocol tests
+
 ### Two-process split
 
 - **`crates/crucible-orchestrator`** — long-running Rust daemon. Owns the SQLite state DB, the cycle state machine, the VM lifecycle, and statistical evaluation. Never calls the Anthropic API directly.
