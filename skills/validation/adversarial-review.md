@@ -37,6 +37,12 @@ EVIDENCE.md and SCORECARD.md "Review trajectory" section.
 - Attack the mechanism: is there a cheaper explanation? does the
   claimed cost have a prototype probe proving it exists
   (see discovery/profiling.md, prototype-first)?
+- Attack the general patch: does it integrate correctly with the surrounding
+  code it's mutating? Does it introduce any new bugs, race conditions, etc?
+  Does it copy paste when it should have added the proper abstraction?
+- Attack the commit format: Do the title and commit summary sound like they
+  were written by a human? Are any comments that the patch added overly
+  verbose, or out of place compared to the rest of the file?
 - Default to REVISE/SCRAP when uncertain. An approval must be earned.
 
 ## Related bars
