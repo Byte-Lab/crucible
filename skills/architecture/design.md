@@ -1,7 +1,12 @@
 # Crucible: Agentic Linux Gaming Performance Optimization
 
-**Date:** 2026-04-12
-**Status:** Draft
+**Status:** Original system design (April 2026). The architecture here
+(two-process split, state machine, agent contract, evaluation) is still
+the map of the system. Operational details have drifted since -- vng
+flags, model names, script paths (scripts/ is now testbed/virt/), the
+Agent SDK migration, and the project-structure tree below predate the
+testbed/patches/skills reorg. CLAUDE.md is authoritative wherever the
+two disagree.
 
 ## Overview
 
@@ -435,9 +440,8 @@ crucible/
 |   +-- setup-rootfs.sh            # Guest rootfs with Steam + tools
 |   +-- install-systemd.sh         # systemd service installation
 |
-+-- docs/
-    +-- superpowers/
-        +-- specs/
++-- skills/
+    +-- architecture/
 ```
 
 ## Configuration

@@ -23,7 +23,7 @@ constraints (sudo elevation, insecure-apt on Ubuntu hosts, stamp files).
 ## deck/ - Steam Deck bare-metal testbed
 
 Bootstrap, benchmark, and analysis scripts for the Deck lane
-(docs/steam-deck-lane.md has the architecture; the orchestrator side is
+(skills/platform/deck/deck-lane.md has the architecture; the orchestrator side is
 crates/crucible-orchestrator/src/deck.rs):
 
 - deck-slot-b.sh             slot-B clone/install/select/mark-good (deployed

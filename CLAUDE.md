@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Crucible is a closed-loop agentic system that optimizes Linux gaming performance by running benchmarks in a passthrough-GPU VM, identifying bottlenecks, generating kernel/userspace patches, and re-measuring. A Rust orchestrator daemon drives the state machine; Python agents powered by the Anthropic SDK do the reasoning-heavy steps.
 
-Design and plan documents live in `docs/superpowers/specs/` and `docs/superpowers/plans/`. Read `docs/superpowers/specs/2026-04-12-crucible-design.md` before making architectural changes.
+Task-scoped reference material lives in `skills/` -- `skills/README.md` maps which subtree to load by cycle stage (discovery, review, validation) and platform (virt VM lane, Steam Deck lane). Read `skills/architecture/design.md` before making architectural changes.
 
 ## Common commands
 
@@ -114,9 +114,12 @@ Logging: orchestrator uses `tracing` with `RUST_LOG`-style env filter — defaul
   by `patches/candidates/patchctl`, `negative-results/`, shared `evidence/`
   (see "Upstream patch corpus" section below). Perfetto traces are
   co-located with their patch but gitignored (*.pftrace).
-- `config/` -- crucible.toml; `docs/` -- design specs + dated plan docs
-  (plan docs are historical records, paths inside may predate reorgs);
-  `tests/python/` -- agent/protocol tests
+- `skills/` -- task-scoped reference material, organized by cycle stage
+  and platform: `architecture/` (design spec), `discovery/` (profiling
+  toolkit + prototype-first rule), `validation/` (adversarial review,
+  winner validation + A/A calibration), `platform/{virt,deck}/` (lane
+  constraints). Start at `skills/README.md` for the when-to-load map.
+- `config/` -- crucible.toml; `tests/python/` -- agent/protocol tests
 
 ### Two-process split
 
@@ -151,7 +154,7 @@ Steam-mode path (`mode = "steam"`, milestone G3): the profiler calls `launch_ste
 
 Steam-mode presentation stack (2026-07-02, root-caused with Civ 6 app 289070): **weston MUST run with `--idle-time=0`** (in `WESTON_ARGV`). Weston's default 300s idle timeout blanks the input-less headless output and nothing ever wakes it: frame callbacks stop, Xwayland Present degrades to its 1 Hz fallback timer — Civ 6's menu "rendered" at exactly ~1000ms/frame on an idle GPU — and Vulkan WSI presents block forever (this, not a Dota-specific quirk, was the earlier "Dota stops presenting frames / gpu_load=0" symptom; Steam client settle alone eats 240s so every launch landed past the 300s deadline). With the compositor awake, Civ 6's menu on stock radeonsi runs ~40fps vsync'd / ~71fps uncapped / ~60fps with MangoHud `fps_limit=60` at 3-5% GPU. The remaining 40-vs-60 gap is GLX-under-Xwayland present pacing (~1.5 repaint ticks per vsync'd swap against weston's 60Hz headless output — `DEFAULT_OUTPUT_REPAINT_REFRESH`), so the launch env sets `vblank_mode=0`: benchmark numbers must not be capped/quantized by compositor pacing. The zink GL→RADV routing experiment was reverted (its "radeonsi presents no frames" premise was the idle-out bug; Mesa's default radeonsi is what real desktops run). Civ 6 ships three self-terminating benchmarks — `-benchmark graphicsbenchmark` (GPU flythrough, verified headless: renders, writes first-party per-frame CSV to `Logs/Benchmark-<ts>.csv` matching MangoHud, exits clean), `-benchmark xp2benchmark` (heavier GS scene), `-benchmark aibenchmark` (CPU-bound late-game AI turns — the right workload class for scheduler patches).
 
-Winner validation: a high-confidence patch (Welch-significant game improvement, no regression) additionally runs the standard upstream regression benchmarks for the subsystem it touches — mapping and protocol in `docs/winner-validation.md` (scheduler: perf bench sched pipe/messaging, schbench, timed kernel compile, stress-ng --switch via `~/.cache/virtme-ng/schedbench.sh` on the bench rootfs). Results go into the winner's `EVIDENCE.md` package (`~/.crucible/civ6-winners/`), regressions included.
+Winner validation: a high-confidence patch (Welch-significant game improvement, no regression) additionally runs the standard upstream regression benchmarks for the subsystem it touches — mapping and protocol in `skills/validation/winner-validation.md` (scheduler: perf bench sched pipe/messaging, schbench, timed kernel compile, stress-ng --switch via `~/.cache/virtme-ng/schedbench.sh` on the bench rootfs). Results go into the winner's `EVIDENCE.md` package (`~/.crucible/civ6-winners/`), regressions included.
 
 Steam-mode debugging: the guest's rw overlay is ephemeral, so in-guest logs vanish at poweroff — write captures to `/run/virtme/cache/...` (the 9p mount of host `~/.cache/virtme-ng`, mounted automatically by vng) and harvest from the host after `poweroff -f`. The `~/.cache/virtme-ng/civ6*.sh` scripts are working examples of the pattern (boot with `--exec 'sh /run/virtme/cache/<script>.sh'`). Known gap: `game_selector`'s `list_steam_games` runs on the *host* before the VM boots, so it scans the host's Steam libraries, not the guest rootfs library the profiler actually launches from — in steam mode it can claim the configured `steam_app_id` "is not installed" while the launch succeeds anyway (observed 2026-07-02 with Civ 6). `BENCHMARK_GAMES` in `agents/game_selector/tools.py` also predates the verified Civ 6 modes. Point `list_steam_games` at the seeded rootfs library (`~/.crucible/steam-rootfs/home/crucible/.local/share/Steam/steamapps`) or add 289070 to `BENCHMARK_GAMES` before trusting selector output in steam mode.
 

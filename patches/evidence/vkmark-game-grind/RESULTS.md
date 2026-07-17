@@ -1,5 +1,15 @@
 # Crucible — Game-mode kernel-patch corpus (2026-07-02)
 
+> Historical record of the first autonomous 10-cycle game-mode grind
+> (moved from docs/superpowers/results/). Later fate of the two
+> "winners": both were subsequently KILLED -- drm-sched-wq-highpri
+> REGRESSED when re-measured on the Deck's Van Gogh APU (Civ6 gfx p99
+> +4.8%, p=0.005; desktop evidence did not transfer), and
+> sched-fair-sis-util-idle-floor is a standalone kill. Diffs of the
+> neptune ports live in ../../negative-results/; see also
+> ../VKMARK-FINDINGS.md. Single-platform wins do not transfer.
+> Path note: scripts/setup-host.sh below is now testbed/virt/setup-host.sh.
+
 Raw material for the **gaming-on-Linux microconference (Oct 2026)** talk.
 
 ## What ran
