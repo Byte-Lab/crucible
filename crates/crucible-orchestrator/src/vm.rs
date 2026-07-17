@@ -292,11 +292,11 @@ impl VmManager {
             Some(driver) if driver == "vfio-pci" => Ok(()),
             Some(driver) => anyhow::bail!(
                 "vfio device {addr} is bound to '{driver}', not vfio-pci; \
-                 run scripts/setup-host.sh to bind it before booting"
+                 run testbed/virt/setup-host.sh to bind it before booting"
             ),
             None => anyhow::bail!(
                 "vfio device {addr} has no driver bound (or does not exist); \
-                 run scripts/setup-host.sh and check the PCI address"
+                 run testbed/virt/setup-host.sh and check the PCI address"
             ),
         }
     }

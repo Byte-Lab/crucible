@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the Steam game-measurement rootfs for `vng --root` (milestone G3).
 #
-# Extends the GPU benchmark rootfs (scripts/setup-game-rootfs.sh) with the
+# Extends the GPU benchmark rootfs (testbed/virt/setup-game-rootfs.sh) with the
 # Steam client, steamcmd, and a weston-headless + Xwayland display stack so
 # real Steam titles can run in the guest and be measured through MangoHud.
 # gamescope is deliberately absent: it is not packaged in trixie (sid
@@ -48,7 +48,7 @@
 # ~/.steam/debian-installation rather than the seeded client.
 #
 # Usage:
-#   scripts/setup-steam-rootfs.sh [--target <dir>] [--suite <debian-suite>] [--force]
+#   testbed/virt/setup-steam-rootfs.sh [--target <dir>] [--suite <debian-suite>] [--force]
 #
 # The script auto-elevates via sudo if not already root.
 
@@ -75,10 +75,10 @@ Environment:
 EOF
 }
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT_TAG="setup-steam-rootfs"
 # shellcheck source=lib/rootfs-common.sh
-source "$REPO_ROOT/scripts/lib/rootfs-common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/rootfs-common.sh"
 
 TARGET="$(rootfs_default_target "${CRUCIBLE_STEAM_ROOTFS:-}" steam-rootfs)"
 SUITE="trixie"

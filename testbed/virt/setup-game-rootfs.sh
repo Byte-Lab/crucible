@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Build the GPU-native benchmark rootfs for `vng --root`.
 #
-# Extends the minimal synthetic rootfs (scripts/setup-rootfs.sh) with
+# Extends the minimal synthetic rootfs (testbed/virt/setup-rootfs.sh) with
 # Mesa/Vulkan drivers, MangoHud, and the OSS benchmarks the guest
 # agent's launch_benchmark RPC allow-lists (vkmark, glmark2). Based on
 # Debian trixie: bookworm's Mesa 22.x predates usable RDNA3 (gfx1100 /
@@ -13,7 +13,7 @@
 # without a compositor (vkmark/glmark2 render via DRM/KMS directly).
 #
 # Usage:
-#   scripts/setup-game-rootfs.sh [--target <dir>] [--suite <debian-suite>] [--force]
+#   testbed/virt/setup-game-rootfs.sh [--target <dir>] [--suite <debian-suite>] [--force]
 #
 # The script auto-elevates via sudo if not already root.
 
@@ -31,10 +31,10 @@ Options:
 EOF
 }
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT_TAG="setup-game-rootfs"
 # shellcheck source=lib/rootfs-common.sh
-source "$REPO_ROOT/scripts/lib/rootfs-common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/rootfs-common.sh"
 
 TARGET="$(rootfs_default_target "${CRUCIBLE_GAME_ROOTFS:-}" game-rootfs)"
 SUITE="trixie"

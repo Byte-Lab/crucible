@@ -1,4 +1,4 @@
-# scripts/lib/rootfs-common.sh
+# testbed/virt/lib/rootfs-common.sh
 #
 # Shared helpers for the rootfs build scripts (setup-rootfs.sh and
 # setup-game-rootfs.sh). Sourced, not executed. Callers set:

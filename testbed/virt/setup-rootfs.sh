@@ -4,7 +4,7 @@
 # The image carries just enough to run the Crucible guest agent and a
 # synthetic stress-ng benchmark. Steam, Wine, Mesa, and MangoHud are
 # intentionally absent — for the GPU-native benchmark rootfs see
-# scripts/setup-game-rootfs.sh.
+# testbed/virt/setup-game-rootfs.sh.
 #
 # Runs mmdebstrap as actual root so the resulting files are owned by
 # uid 0 on disk. vng's 9p root mount reports those uids straight
@@ -13,7 +13,7 @@
 # subuid) tripped exactly that panic in our e2e attempts.
 #
 # Usage:
-#   scripts/setup-rootfs.sh [--target <dir>] [--suite <debian-suite>] [--force]
+#   testbed/virt/setup-rootfs.sh [--target <dir>] [--suite <debian-suite>] [--force]
 #
 # The script auto-elevates via sudo if not already root.
 
@@ -31,10 +31,10 @@ Options:
 EOF
 }
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SCRIPT_TAG="setup-rootfs"
 # shellcheck source=lib/rootfs-common.sh
-source "$REPO_ROOT/scripts/lib/rootfs-common.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/lib/rootfs-common.sh"
 
 TARGET="$(rootfs_default_target "${CRUCIBLE_ROOTFS:-}" rootfs)"
 SUITE="bookworm"

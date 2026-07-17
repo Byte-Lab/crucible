@@ -8,8 +8,8 @@
 # asks for confirmation first.
 #
 # Usage:
-#   scripts/setup-host.sh <pci-addr>            # precheck + print commands
-#   scripts/setup-host.sh <pci-addr> --bind     # actually bind to vfio-pci
+#   testbed/virt/setup-host.sh <pci-addr>            # precheck + print commands
+#   testbed/virt/setup-host.sh <pci-addr> --bind     # actually bind to vfio-pci
 #
 # <pci-addr> is the short form from config/crucible.toml [vm] vfio_device,
 # e.g. "0a:00.0". The domain prefix ("0000:") is added automatically.

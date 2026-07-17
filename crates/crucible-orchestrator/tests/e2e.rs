@@ -10,9 +10,9 @@
 //!     kernel source tree usable by `KernelBuilder::build_kernel`
 //!
 //! The synthetic loop also needs `CRUCIBLE_ROOTFS_PATH` (default
-//! `~/.crucible/rootfs`, built by `scripts/setup-rootfs.sh`, `.crucible-built`
+//! `~/.crucible/rootfs`, built by `testbed/virt/setup-rootfs.sh`, `.crucible-built`
 //! stamp). The game loop needs `CRUCIBLE_GAME_ROOTFS_PATH` (default
-//! `~/.crucible/game-rootfs`, built by `scripts/setup-game-rootfs.sh`,
+//! `~/.crucible/game-rootfs`, built by `testbed/virt/setup-game-rootfs.sh`,
 //! `.crucible-game-built` stamp) and optionally `CRUCIBLE_VFIO_DEVICE` for
 //! real GPU passthrough — without it Mesa's lavapipe renders vkmark in
 //! software, which still exercises the whole MangoHud → fetch_file →
@@ -237,7 +237,7 @@ async fn synthetic_cycle_writes_measurements_and_evaluation() {
         .unwrap_or_else(|_| format!("{}/.crucible/rootfs", std::env::var("HOME").unwrap()));
     assert!(
         Path::new(&rootfs).join(".crucible-built").exists(),
-        "rootfs at {} missing .crucible-built stamp (run scripts/setup-rootfs.sh)",
+        "rootfs at {} missing .crucible-built stamp (run testbed/virt/setup-rootfs.sh)",
         rootfs
     );
 
@@ -269,7 +269,7 @@ async fn gpu_game_cycle_produces_nonzero_fps() {
     });
     assert!(
         Path::new(&rootfs).join(".crucible-game-built").exists(),
-        "game rootfs at {} missing .crucible-game-built stamp (run scripts/setup-game-rootfs.sh)",
+        "game rootfs at {} missing .crucible-game-built stamp (run testbed/virt/setup-game-rootfs.sh)",
         rootfs
     );
     // Optional real passthrough; empty string renders via lavapipe.
@@ -317,7 +317,7 @@ async fn steam_cycle_produces_nonzero_fps() {
     });
     assert!(
         Path::new(&rootfs).join(".crucible-steam-built").exists(),
-        "steam rootfs at {} missing .crucible-steam-built stamp (run scripts/setup-steam-rootfs.sh)",
+        "steam rootfs at {} missing .crucible-steam-built stamp (run testbed/virt/setup-steam-rootfs.sh)",
         rootfs
     );
     // A real GPU is required: Steam titles won't produce meaningful frames
